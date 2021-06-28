@@ -58,9 +58,9 @@ The data used for this report is downloaded from Twitter using the `search_tweet
 
 Fetching the data from Github.
 ```{r message=FALSE, warning=FALSE}
-blacktwitter <- read_csv("https://raw.githubusercontent.com/andreasbj77/SDS/main/blacktwitter.csv")
+blacktwitter <- read_csv("https://raw.githubusercontent.com/andreasbj77/Projects/main/SDS/M2/Data/blacktwitter.csv")
 
-bluetwitter <- read_csv("https://raw.githubusercontent.com/andreasbj77/SDS/main/bluetwitter.csv")
+bluetwitter <- read_csv("https://raw.githubusercontent.com/andreasbj77/Projects/main/SDS/M2/Data/bluetwitter.csv")
 ```
 
 # Preprocessing
