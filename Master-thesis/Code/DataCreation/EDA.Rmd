@@ -1,0 +1,933 @@
+---
+title: "Explorative Data Analysis"
+author: "Andreas Borup Joergensen, Mette Koch Moeller, Robert Hoestrup"
+date: "04-06-2021"
+output:
+  html_notebook:
+    code_folding: show
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+---
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE,
+                     message=FALSE,
+                     comment=FALSE, 
+                     fig.align="center"
+                     )
+```
+Downloading the required packages.
+```{r}
+library(tidyverse) #Collection of all the good stuff like dplyr, ggplot2 ect.
+library(magrittr) #For advanced piping
+library(recipes) #For imputing NA's
+library(lmtest) #For Granger Cuasality test
+library(ggpubr) #For mixing multiple plots together
+library(rtweet) #For saving as cvs file
+library(imputeTS) 
+library(tseries)
+library(xts)
+```
+
+# Downloading the data set 
+The data set is downloaded from [github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data).
+```{r}
+data <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Final_data/DataCreation.csv")
+```
+
+# Dealing with NA's
+When predicting the stock price, the different approaches can not handle missing values. First, check if the data set contains any NA's in the data set and how many.
+```{r}
+colSums(is.na(data)) %>% as.data.frame() %>% rename("NAs" = ".") %>% filter(NAs != 0)
+```
+The table shows there is 79 NAs in *OilPrice*, 63 NAs in *SP500*, 20 NAs in *GoldFutures* and a couple of NAs in 9 other variables. The high amount of NAs is partly because some stocks follows the American stock exchange and has different days off. For this study, it is chosen to impute the NA's by using interpolation. Before imputing the NA's, the distribution of the NA's is investigated.
+```{r}
+data %>%
+  filter(is.na(NovoNordisk) |
+         is.na(OilPrice) | 
+         is.na(GoldFutures) |
+         is.na(USD) | 
+         is.na(GBP) | 
+         is.na(SEK) | 
+         is.na(NOK) | 
+         is.na(CNY) | 
+         is.na(TwoYearBond) | 
+         is.na(TenYearBond) | 
+         is.na(`C20index`) |
+         is.na(SP500)) %>%
+  select(Date, NovoNordisk, OilPrice,`C20index`, SP500, USD, GBP, SEK, NOK, CNY, TwoYearBond, TenYearBond, GoldFutures)
+```
+The NA's seems to have a fairly distribution and is imputed using interpolation. 
+```{r}
+data %<>% 
+  na_interpolation( option = "spline")
+```
+
+
+## Correlations 
+Creating a heatmap of the correlations before 2018-01-01. 
+```{r fig.height=10, fig.width=10}
+data %>%
+  filter(Date < "2019-01-01") %>%
+  select(-Date) %>%
+  GGally::ggcorr(label = TRUE, 
+                 label_size = 5, 
+                 label_round = 3, 
+                 label_alpha = TRUE)
+```
+
+
+# Choosing the dependent variables
+When choosing which variables to forecast, this study has chosen to use the biggest stock from each sector. Plotting the value of the stock 2018-01-02 for each sector.
+```{r}
+total_data <- gather(data, Company, Value, -Date)
+total_data %>%
+  filter(Date == "2019-01-02") %>%
+  filter(Company != "OilPrice" & Company != "USD" & Company != "GBP" & Company != "SEK" & Company != "NOK" & Company != "CNY" & Company != "GoldFutures" & Company != "TwoYearBond" & Company != "TenYearBond" & Company != "C20index"& Company != "SP500") %>%
+  mutate(Value = Value %>% round(2)) %>%
+  arrange(desc(Value)) %>%
+  mutate(Sector = ifelse(Company == "Carlsberg" |
+                         Company == "RoyalUnibrew" ,"Consumption",
+                  ifelse(Company == "Vestas", "Energy",
+                  ifelse(Company == "Tryg"|
+                         Company == "JyskeBank"|
+                         Company == "SydBank"|
+                         Company == "DanskeBank", "Finance", 
+                  ifelse(Company == "Ambu"| 
+                         Company == "Coloplast" | 
+                         Company == "Demant" | 
+                         Company == "Genmab"|
+                         Company == "GN"| 
+                         Company == "Lundbeck"|
+                         Company == "NovoNordisk"| 
+                         Company == "Novozymes"| 
+                         Company == "WilliamDemant", "Health Care", 
+                  ifelse(Company == "DSV"|
+                         Company == "FLSmidth"| 
+                         Company == "MaerskA" | 
+                         Company == "MaerskB"|
+                         Company == "NKT", "Industry",       
+                  ifelse(Company == "SimCorp"," Technology", "test")))))))%>%
+  arrange(desc(Sector,Value)) %>% select(-Date) 
+```
+For Industry, MaerskB is chosen, for Health Care Genmab is chosen, for Finance Jyske Bank is chosen, for Energy Vestas is chosen, dor Consumption Carlsberg is chosen, and finally, for Technology SimCorp is choosen
+
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(total_data)
+```
+
+
+# Investigating the Dependent variables
+## Plotting the variable
+Each dependent variable is plotted and it colored for black for the training period, red for the testing period and blue for the forecasting period.
+```{r}
+Plot1 <-  data  %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = Carlsberg, x = Date, color= label) ) + geom_line(size=0.3)  + theme(legend.position = "none")  + labs(y="", x = "Carlsberg")   + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2) + scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_x_date(date_labels = "%Y",date_breaks = "1 years")
+
+Plot2 <-  data  %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = Genmab, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none") + labs(y="", x = "Genmab")  + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_x_date(date_labels = "%Y",date_breaks = "1 years")
+
+
+Plot3 <-  data  %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% 
+  ggplot(aes(y = JyskeBank, x = Date, color= label)) + geom_line( size=0.3) + theme(legend.position = "none") + labs(y="", x = "Jyske Bank") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_x_date(date_labels = "%Y",date_breaks = "1 years")
+
+
+Plot4 <-  data %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%   ggplot(aes(y = MaerskB, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none") + labs(y="", x = "Mærsk B") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_x_date(date_labels = "%Y",date_breaks = "1 years")
+
+Plot5 <-  data %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = SimCorp, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none")     + labs(y="", x = "SimCorp") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_x_date(date_labels = "%Y",date_breaks = "1 years")
+  
+Plot6 <-  data %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = Vestas, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none")     + labs(y="", x = "Vestas") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_x_date(date_labels = "%Y",date_breaks = "1 years")
+```
+
+
+```{r fig.height=7, fig.width=8}
+Plot_Collected<-ggarrange(Plot1, Plot2, Plot3, Plot4, Plot5, Plot6, ncol = 2, nrow = 3)  
+annotate_figure(Plot_Collected, top = text_grob("The dependent variabe and its timeperiods", size = 15))
+```
+
+Plotting the daily change and it colored for black for the training period, red for the testing period and blue for the forecasting period. 
+```{r}
+data_Change <- data %>%
+  mutate(Carlsberg  = ((Carlsberg-lag(Carlsberg))/lag(Carlsberg))*100,
+         Genmab = ((Genmab-lag(Genmab))/lag(Genmab))*100,
+         JyskeBank= ((JyskeBank-lag(JyskeBank))/lag(JyskeBank))*100,
+         MaerskB = ((  MaerskB-lag(MaerskB))/lag(MaerskB))*100,
+         Vestas = ((Vestas-lag(Vestas))/lag(Vestas))*100,
+         SimCorp = ((SimCorp-lag(SimCorp))/lag(SimCorp))*100) %>%
+         drop_na()
+```
+
+
+```{r}
+Plot1 <-  data_Change %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = Carlsberg, x = Date, color= label) ) + geom_line(size=0.3)  + theme(legend.position = "none")  + labs(y="", x = "Carlsberg")   + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2) + scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_y_continuous(limits = c(-10,15)) 
+
+Plot2 <-  data_Change  %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = Genmab, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none") + labs(y="", x = "Genmab")  + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black"))+ scale_y_continuous(limits = c(-10,15)) 
+
+
+Plot3 <-  data_Change  %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% 
+  ggplot(aes(y = JyskeBank, x = Date, color= label)) + geom_line( size=0.3) + theme(legend.position = "none") + labs(y="", x = "Jyske Bank") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black"))+ scale_y_continuous(limits = c(-10,15)) 
+
+
+Plot4 <-  data_Change %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%   ggplot(aes(y = MaerskB, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none") + labs(y="", x = "Mærsk B") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black"))+ scale_y_continuous(limits = c(-10,15)) 
+  
+Plot5 <-  data_Change %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = SimCorp, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none")     + labs(y="", x = "SimCorp") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_y_continuous(limits = c(-10,15)) 
+
+Plot6 <-  data_Change %>%
+  mutate(label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>% ggplot(aes(y = Vestas, x = Date, color= label)) + geom_line(size=0.3) + theme(legend.position = "none")     + labs(y="", x = "Vestas") + geom_vline(aes(xintercept=as.Date("2017-12-29")), color="black", linetype="dashed", size=0.2) + geom_vline(aes(xintercept=as.Date("2018-12-28")), color="black", linetype="dashed", size=0.2)+ scale_color_manual(values = c("darkred", "blue4", "Black")) + scale_y_continuous(limits = c(-10,15)) 
+
+
+```
+
+```{r fig.height=6, fig.width=8}
+Plot_Collected<-ggarrange(Plot1, Plot2, Plot3, Plot4, Plot5, Plot6, ncol = 2, nrow =3)  
+annotate_figure(Plot_Collected, top = text_grob("The dependent variabe and its timeperiods", size = 15))
+```
+
+## Descriptive statistic
+Calculating the mean, SD and daily average pct change.
+
+### Carlsberg 
+```{r}
+DataEntirePeriod <- data %>%select(Date, Carlsberg) %>% mutate(Mean = mean(Carlsberg), SD = sd(Carlsberg), Change  = (Carlsberg-lag(Carlsberg))/lag(Carlsberg)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>% mutate(Label = "Entire Period") %>% relocate(Label)
+data %>%
+  select(Date, Carlsberg) %>%
+  mutate(Label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%
+  group_by(Label) %>% mutate(Mean = mean(Carlsberg), SD = sd(Carlsberg), Change  = (Carlsberg-lag(Carlsberg))/lag(Carlsberg)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>%rbind(DataEntirePeriod) %>% mutate(Mean = round(Mean, 2), SD = round(SD,2),Change = round(Change,2))
+rm(DataEntirePeriod)
+```
+
+### Genmab
+```{r}
+DataEntirePeriod <- data %>%select(Date, Genmab) %>% mutate(Mean = mean(Genmab), SD = sd(Genmab), Change  = (Genmab-lag(Genmab))/lag(Genmab)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>% mutate(Label = "Entire Period") %>% relocate(Label)
+data %>%
+  select(Date, Genmab) %>%
+  mutate(Label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%
+  group_by(Label) %>% mutate(Mean = mean(Genmab), SD = sd(Genmab), Change  = (Genmab-lag(Genmab))/lag(Genmab)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>%rbind(DataEntirePeriod) %>% mutate(Mean = round(Mean, 2), SD = round(SD,2),Change = round(Change,2))
+rm(DataEntirePeriod)
+```
+
+### Jyske Bank
+```{r}
+DataEntirePeriod <- data %>%select(Date, JyskeBank) %>% mutate(Mean = mean(JyskeBank), SD = sd(JyskeBank), Change  = (JyskeBank-lag(JyskeBank))/lag(JyskeBank)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>% mutate(Label = "Entire Period") %>% relocate(Label)
+data %>%
+  select(Date, JyskeBank) %>%
+  mutate(Label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%
+  group_by(Label) %>% mutate(Mean = mean(JyskeBank), SD = sd(JyskeBank), Change  = (JyskeBank-lag(JyskeBank))/lag(JyskeBank)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>%rbind(DataEntirePeriod) %>% mutate(Mean = round(Mean, 2), SD = round(SD,2),Change = round(Change,2))
+rm(DataEntirePeriod)
+```
+
+### Mærsk B
+```{r}
+DataEntirePeriod <- data %>%select(Date, MaerskB) %>% mutate(Mean = mean(MaerskB), SD = sd(MaerskB), Change  = (MaerskB-lag(MaerskB))/lag(MaerskB)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>% mutate(Label = "Entire Period") %>% relocate(Label)
+data %>%
+  select(Date, MaerskB) %>%
+  mutate(Label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%
+  group_by(Label) %>% mutate(Mean = mean(MaerskB), SD = sd(MaerskB), Change  = (MaerskB-lag(MaerskB))/lag(MaerskB)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>%rbind(DataEntirePeriod) %>% mutate(Mean = round(Mean, 2), SD = round(SD,2),Change = round(Change,2))
+rm(DataEntirePeriod)
+```
+
+### SimCorp
+```{r}
+DataEntirePeriod <- data %>%select(Date, SimCorp) %>% mutate(Mean = mean(SimCorp), SD = sd(SimCorp), Change  = (SimCorp-lag(SimCorp))/lag(SimCorp)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>% mutate(Label = "Entire Period") %>% relocate(Label)
+data %>%
+  select(Date, SimCorp) %>%
+  mutate(Label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%
+  group_by(Label) %>% mutate(Mean = mean(SimCorp), SD = sd(SimCorp), Change  = (SimCorp-lag(SimCorp))/lag(SimCorp)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>%rbind(DataEntirePeriod) %>% mutate(Mean = round(Mean, 2), SD = round(SD,2),Change = round(Change,2))
+rm(DataEntirePeriod)
+```
+
+### Vestas
+```{r}
+DataEntirePeriod <- data %>%select(Date, Vestas) %>% mutate(Mean = mean(Vestas), SD = sd(Vestas), Change  = (Vestas-lag(Vestas))/lag(Vestas)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>% mutate(Label = "Entire Period") %>% relocate(Label)
+data %>%
+  select(Date, Vestas) %>%
+  mutate(Label = ifelse(Date <= "2017-12-29", "Training", ifelse(Date > "2017-12-29" & Date <= "2018-12-28", "Test", "Forecast"))) %>%
+  group_by(Label) %>% mutate(Mean = mean(Vestas), SD = sd(Vestas), Change  = (Vestas-lag(Vestas))/lag(Vestas)*100) %>% drop_na() %>% mutate(Change = mean(abs(Change))) %>% distinct(Mean, SD, Change) %>%rbind(DataEntirePeriod) %>% mutate(Mean = round(Mean, 2), SD = round(SD,2),Change = round(Change,2))
+rm(DataEntirePeriod)
+```
+## Augmented Diebold-Mariano test
+Checking if the data is stationary. The code looks a bit messy, but the output is much nicer and is easier to read.
+```{r}
+dataADF <- data %>% filter( Date <= "2017-12-29")
+dataADF <-   xts(dataADF$Carlsberg, order.by = as.Date(dataADF$Date))
+dataADF1 <-dataADF %>% adf.test() %>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "Carlsberg" = lead(`Alternative Hypothesis`), Carlsberg= Carlsberg %>% as.numeric, Carlsberg = round(Carlsberg,2)) %>% as.data.frame() %>%  head(1) %>%select(Carlsberg) %>% mutate("DF-test"="p-value")%>% relocate(`DF-test`)
+
+dataADFdiff <-dataADF %>% diff() %>% na.omit() %>% adf.test()%>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "Carlsberg" = lead(`Alternative Hypothesis`), Carlsberg = ifelse(Carlsberg == 0.01, ">0.01",Carlsberg)) %>% as.data.frame() %>%  head(1) %>%select(Carlsberg) %>%mutate("DF-test"="Diff p-value")  %>% relocate(`DF-test`)
+CarlsbergADF <- rbind(dataADF1,dataADFdiff)
+
+dataADF <- data %>% filter( Date <= "2017-12-29")
+dataADF <- xts(dataADF$Genmab, order.by = as.Date(dataADF$Date))
+dataADF1 <-dataADF %>% adf.test() %>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "Genmab" = lead(`Alternative Hypothesis`) ,Genmab = Genmab %>% as.numeric(), Genmab= round(Genmab,2))%>% as.data.frame()%>% head(1) %>% select(Genmab)
+
+dataADFdiff <-dataADF %>% diff() %>% na.omit() %>% adf.test()%>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "Genmab" = lead(`Alternative Hypothesis`),Genmab = ifelse(Genmab == 0.01, ">0.01",Genmab)) %>% as.data.frame() %>%  head(1) %>%select(Genmab) 
+GenmabADF <- rbind(dataADF1,dataADFdiff)
+
+dataADF <- data %>% filter( Date <= "2017-12-29")
+dataADF <- xts(dataADF$JyskeBank, order.by = as.Date(dataADF$Date))
+dataADF1 <-dataADF %>% adf.test() %>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "JyskeBank" = lead(`Alternative Hypothesis`),JyskeBank = JyskeBank %>% as.numeric(), JyskeBank= round(JyskeBank,2)) %>% as.data.frame() %>%  head(1) %>%select(JyskeBank) 
+dataADFdiff <-dataADF %>% diff() %>% na.omit() %>% adf.test()%>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "JyskeBank" = lead(`Alternative Hypothesis`),JyskeBank = ifelse(JyskeBank == 0.01, ">0.01",JyskeBank)) %>% as.data.frame() %>%  head(1) %>%select(JyskeBank) 
+JyskeBankADF <- rbind(dataADF1,dataADFdiff)
+
+dataADF <- data %>% filter( Date <= "2017-12-29")
+dataADF <- xts(dataADF$MaerskB, order.by = as.Date(dataADF$Date))
+dataADF1 <-dataADF %>% adf.test() %>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "MaerskB" = lead(`Alternative Hypothesis`)) %>% as.data.frame() %>%  head(1) %>%select(MaerskB)%>% mutate(MaerskB = MaerskB %>% as.numeric(), MaerskB= round(MaerskB,2))
+dataADFdiff <-dataADF %>% diff() %>% na.omit() %>% adf.test()%>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "MaerskB" = lead(`Alternative Hypothesis`), MaerskB = ifelse(MaerskB == 0.01, ">0.01",MaerskB)) %>% as.data.frame() %>%  head(1) %>%select(MaerskB) 
+MaerskBADF <- rbind(dataADF1,dataADFdiff)
+
+dataADF <- data %>% filter( Date <= "2017-12-29")
+dataADF <- xts(dataADF$SimCorp, order.by = as.Date(dataADF$Date))
+dataADF1 <-dataADF %>% adf.test() %>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "SimCorp" = lead(`Alternative Hypothesis`), SimCorp = SimCorp %>% as.numeric(), SimCorp= round(SimCorp,2)) %>% as.data.frame() %>%  head(1) %>%select(SimCorp)
+
+dataADFdiff <-dataADF %>% diff() %>% na.omit() %>% adf.test()%>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "SimCorp" = lead(`Alternative Hypothesis`), SimCorp = ifelse(SimCorp== 0.01, ">0.01",SimCorp)) %>% as.data.frame() %>%  head(1) %>%select(SimCorp)
+SimCorpADF <- rbind(dataADF1,dataADFdiff)
+
+dataADF <- data %>% filter( Date <= "2017-12-29")
+dataADF <- xts(dataADF$Vestas, order.by = as.Date(dataADF$Date))
+dataADF1 <-dataADF %>% adf.test() %>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "Vestas" = lead(`Alternative Hypothesis`), Vestas = Vestas %>% as.numeric(), Vestas= round(Vestas,2)) %>% as.data.frame() %>%  head(1) %>%select(Vestas)
+
+dataADFdiff <-dataADF %>% diff() %>% na.omit() %>% adf.test()%>% unlist() %>% as.tibble() %>% 
+  mutate("Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "Vestas" = lead(`Alternative Hypothesis`),Vestas = ifelse(Vestas == 0.01, ">0.01",Vestas)) %>% as.data.frame() %>%  head(1) %>%select(Vestas)  
+VestasADF <- rbind(dataADF1,dataADFdiff)
+```
+
+```{r}
+cbind(CarlsbergADF, GenmabADF, JyskeBankADF, MaerskBADF, SimCorpADF, VestasADF) 
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(dataADF,dataADF1, dataADFdiff,CarlsbergADF, GenmabADF, JyskeBankADF, MaerskBADF, SimCorpADF, VestasADF, data_Change, Plot_Collected, Plot1, Plot2,Plot3,Plot4,Plot5, Plot6)
+```
+
+
+# Industy - Mærsk B
+## Selection of features
+This thesis has chosen two versions of each stock - one only depending on its pasts value and one depending on its pasts value and different features. These features are chosen based on a granger causality test. Calculating granger causality for each value and *MaarskB*. Five lags each chosen for this study.
+
+```{r}
+Order_lags <- 5
+data_GC <- data %>% filter(Date < "2018-12-28") 
+DependendVariable <- data_GC$MaerskB
+```
+
+```{r}
+grangertest(DependendVariable ~SP500,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SP500") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$SP500)) %>% as.data.frame()
+```
+
+
+```{r}
+GC1 <- grangertest(DependendVariable ~MaerskA,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskA") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$MaerskA))
+GC2 <- grangertest(DependendVariable ~ Ambu,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Ambu") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Ambu))
+GC3 <- grangertest(DependendVariable ~ Carlsberg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Carlsberg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Carlsberg))
+GC4 <- grangertest(DependendVariable ~ Coloplast,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Coloplast") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Coloplast))
+GC5 <- grangertest(DependendVariable ~ DanskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DanskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DanskeBank))
+GC6 <- grangertest(DependendVariable ~ DSV,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DSV") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DSV))
+GC7 <- grangertest(DependendVariable ~ FLSmidth,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "FLSmidth") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$FLSmidth))
+GC8 <- grangertest(DependendVariable ~ Genmab,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Genmab") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Genmab))
+GC9 <- grangertest(DependendVariable ~ GN,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GN") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$GN))
+GC10 <- grangertest(DependendVariable ~ JyskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "JyskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$JyskeBank))
+GC11 <- grangertest(DependendVariable ~ Lundbeck,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Lundbeck") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Lundbeck))
+GC12 <- grangertest(DependendVariable ~ NovoNordisk,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NovoNordisk") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NovoNordisk))
+GC13 <- grangertest(DependendVariable ~ Novozymes,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Novozymes") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Novozymes))
+GC14 <- grangertest(DependendVariable ~ RoyalUnibrew ,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "RoyalUnibrew ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$RoyalUnibrew))
+GC15 <- grangertest(DependendVariable ~ SimCorp,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SimCorp ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SimCorp))
+GC16 <- grangertest(DependendVariable ~ SydBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SydBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SydBank))
+GC17 <- grangertest(DependendVariable ~ Tryg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Tryg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Tryg))
+GC18 <- grangertest(DependendVariable ~ Vestas,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Vestas") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Vestas))
+GC19 <- grangertest(DependendVariable ~ WilliamDemant,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "WilliamDemant") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$WilliamDemant))
+GC20 <- grangertest(DependendVariable ~ OilPrice,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "OilPrice") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$OilPrice))
+GC21 <- grangertest(DependendVariable ~ USD,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "USD") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$USD))
+GC22 <- grangertest(DependendVariable ~ GBP,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GBP") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GBP))
+GC23 <- grangertest(DependendVariable ~ NOK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NOK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NOK))
+GC24 <- grangertest(DependendVariable ~ SEK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SEK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SEK))
+GC25 <- grangertest(DependendVariable ~ CNY,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "CNY") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$CNY))
+GC26 <- grangertest(DependendVariable ~ C20index,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "C20index") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$C20index))
+GC27 <- grangertest(DependendVariable ~ TwoYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TwoYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TwoYearBond))
+GC28 <- grangertest(DependendVariable ~ TenYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TenYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TenYearBond))
+GC29 <- grangertest(DependendVariable ~ GoldFutures,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GoldFutures") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GoldFutures))
+GC30 <- grangertest(DependendVariable ~SP500,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SP500") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$SP500)) 
+GC_MaerskB <- rbind(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29, GC30) %>% as.data.frame()
+```
+
+A feature is chosen to be significant if the value is equal to 0.1 or less. 
+```{r}
+GC_MaerskB %>%
+    filter(GrangerCausitality <= 0.01) %>% mutate(GrangerCausitality = GrangerCausitality %>% as.numeric())
+```
+For *MaerskB* the features *FLSmidth*, *Genmab*, *NovoNordisk*, and *OilPrice* is chosen. Furthermore, *Date* and the dependent value *MaerskB* is chosen. These variables is selected including *Date* and the dependent value *MaerskB is chosen.
+```{r}
+data_MaerskB <- data %>%
+  select(Date, MaerskB, FLSmidth, NovoNordisk, OilPrice, SP500)
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28, GC29, GC30 ,DependendVariable,Order_lags)
+```
+
+## Saving the data set
+The Mærsk B data set is now done and ready for forecast. It is saved as a cvs-file and uploaded on [Github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data)
+```{r}
+write_as_csv(data_MaerskB,"DataCreationMaerskB.csv")
+```
+
+```{r}
+rm(data_MaerskB)
+```
+
+
+
+# Health Care - Genmab
+## Selection of features
+Calculating granger causality for each value and *Genmab*. Five lags each chosen for this study.
+```{r}
+Order_lags <- 5
+DependendVariable <- data_GC$Genmab
+ 
+GC1 <- grangertest(DependendVariable ~MaerskA,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskA") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskA, DependendVariable))
+GC2 <- grangertest(DependendVariable ~MaerskB,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskB") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskB, DependendVariable))
+GC3 <- grangertest(DependendVariable ~ Ambu,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Ambu") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Ambu))
+GC4 <- grangertest(DependendVariable ~ Carlsberg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Carlsberg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Carlsberg))
+GC5 <- grangertest(DependendVariable ~ Coloplast,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Coloplast") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Coloplast))
+GC6 <- grangertest(DependendVariable ~ DanskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DanskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DanskeBank))
+GC7 <- grangertest(DependendVariable ~ DSV,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DSV") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DSV))
+GC8 <- grangertest(DependendVariable ~ FLSmidth,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "FLSmidth") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$FLSmidth))
+GC9 <- grangertest(DependendVariable ~ GN,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GN") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$GN))
+GC10 <- grangertest(DependendVariable ~ JyskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "JyskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$JyskeBank))
+GC11 <- grangertest(DependendVariable ~ Lundbeck,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Lundbeck") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Lundbeck))
+GC12 <- grangertest(DependendVariable ~ NovoNordisk,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NovoNordisk") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NovoNordisk))
+GC13 <- grangertest(DependendVariable ~ Novozymes,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Novozymes") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Novozymes))
+GC14 <- grangertest(DependendVariable ~ RoyalUnibrew ,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "RoyalUnibrew ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$RoyalUnibrew))
+GC15 <- grangertest(DependendVariable ~ SimCorp,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SimCorp ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SimCorp))
+GC16 <- grangertest(DependendVariable ~ SydBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SydBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SydBank))
+GC17 <- grangertest(DependendVariable ~ Tryg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Tryg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Tryg))
+GC18 <- grangertest(DependendVariable ~ Vestas,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Vestas") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Vestas))
+GC19 <- grangertest(DependendVariable ~ WilliamDemant,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "WilliamDemant") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$WilliamDemant))
+GC20 <- grangertest(DependendVariable ~ OilPrice,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "OilPrice") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$OilPrice))
+GC21 <- grangertest(DependendVariable ~ USD,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "USD") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$USD))
+GC22 <- grangertest(DependendVariable ~ GBP,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GBP") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GBP))
+GC23 <- grangertest(DependendVariable ~ NOK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NOK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NOK))
+GC24 <- grangertest(DependendVariable ~ SEK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SEK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SEK))
+GC25 <- grangertest(DependendVariable ~ CNY,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "CNY") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$CNY))
+GC26 <- grangertest(DependendVariable ~ C20index,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "C20index") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$C20index))
+GC27 <- grangertest(DependendVariable ~ TwoYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TwoYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TwoYearBond))
+GC28 <- grangertest(DependendVariable ~ TenYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TenYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TenYearBond))
+GC29 <- grangertest(DependendVariable ~ GoldFutures,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GoldFutures") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GoldFutures))
+GC_Genmab <- rbind(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29) %>% as.data.frame()
+GC30 <- grangertest(DependendVariable ~SP500,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SP500") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$SP500)) %>% as.data.frame()
+GC_Genmab <- rbind(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29, GC30) %>% as.data.frame()
+```
+
+The significant features is chosen.
+```{r}
+GC_Genmab %>%
+    filter(GrangerCausitality <= 0.01)
+```
+For *Genmab* the features *Lundbeck*, *Sydbank*, and *USD* is chosen. These variables is selected including *Date* and the dependent value *Genmab* is chosen.
+```{r}
+data_Genmab <- data %>%
+  select(Date, Genmab, Lundbeck, USD, SP500)
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29, GC30,DependendVariable,Order_lags)
+```
+
+## Saving the data set
+The Genmab data set is now done and ready for forecast. It is saved as a cvs-file and uploaded on [Github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data)
+```{r}
+write_as_csv(data_Genmab,"DataCreationGenmab.csv")
+```
+
+```{r}
+rm(data_Genmab)
+```
+
+# Finance - Jyske Bank
+
+## Selection of features
+Calculating granger causality for each value and *JyskeBank*. Five lags each chosen for this study.
+```{r}
+Order_lags <- 5
+DependendVariable <- data_GC$JyskeBank
+ 
+GC1 <- grangertest(DependendVariable ~MaerskA,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskA") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskA, DependendVariable))
+GC2 <- grangertest(DependendVariable ~MaerskB,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskB") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskB, DependendVariable))
+GC3 <- grangertest(DependendVariable ~ Ambu,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Ambu") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Ambu))
+GC4 <- grangertest(DependendVariable ~ Carlsberg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Carlsberg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Carlsberg))
+GC5 <- grangertest(DependendVariable ~ Coloplast,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Coloplast") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Coloplast))
+GC6 <- grangertest(DependendVariable ~ DanskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DanskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DanskeBank))
+GC7 <- grangertest(DependendVariable ~ DSV,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DSV") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DSV))
+GC8 <- grangertest(DependendVariable ~ FLSmidth,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "FLSmidth") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$FLSmidth))
+GC9 <- grangertest(DependendVariable ~ Genmab,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Genmab") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Genmab))
+GC10 <- grangertest(DependendVariable ~ GN,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GN") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$GN))
+GC11 <- grangertest(DependendVariable ~ Lundbeck,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Lundbeck") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Lundbeck))
+GC12 <- grangertest(DependendVariable ~ NovoNordisk,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NovoNordisk") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NovoNordisk))
+GC13 <- grangertest(DependendVariable ~ RoyalUnibrew ,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "RoyalUnibrew ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$RoyalUnibrew))
+GC14 <- grangertest(DependendVariable ~ SimCorp,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SimCorp ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SimCorp))
+GC15 <- grangertest(DependendVariable ~ SydBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SydBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SydBank))
+GC16 <- grangertest(DependendVariable ~ Novozymes,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Novozymes") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Novozymes))
+GC17 <- grangertest(DependendVariable ~ Tryg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Tryg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Tryg))
+GC18 <- grangertest(DependendVariable ~ Vestas,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Vestas") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Vestas))
+GC19 <- grangertest(DependendVariable ~ WilliamDemant,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "WilliamDemant") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$WilliamDemant))
+GC20 <- grangertest(DependendVariable ~ OilPrice,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "OilPrice") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$OilPrice))
+GC21 <- grangertest(DependendVariable ~ USD,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "USD") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$USD))
+GC22 <- grangertest(DependendVariable ~ GBP,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GBP") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GBP))
+GC23 <- grangertest(DependendVariable ~ NOK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NOK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NOK))
+GC24 <- grangertest(DependendVariable ~ SEK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SEK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SEK))
+GC25 <- grangertest(DependendVariable ~ CNY,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "CNY") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$CNY))
+GC26 <- grangertest(DependendVariable ~ C20index,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "C20index") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$C20index))
+GC27 <- grangertest(DependendVariable ~ TwoYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TwoYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TwoYearBond))
+GC28 <- grangertest(DependendVariable ~ TenYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TenYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TenYearBond))
+GC29 <- grangertest(DependendVariable ~ GoldFutures,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GoldFutures") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GoldFutures))
+GC30 <- grangertest(DependendVariable ~SP500,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SP500") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$SP500)) %>% as.data.frame()
+GC_JyskeBank<- rbind(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29, GC30) %>% as.data.frame()
+```
+The significant features is chosen.
+```{r}
+GC_JyskeBank %>%
+    filter(GrangerCausitality <= 0.01)
+```
+For *JyskeBank* the features, *Lundbeck*, *NKT*, *Nordea*, *Tryg*, and *USD/DKK* is chosen. These variables is selected including *Date* and the dependent value *JyskeBank* is chosen.
+```{r}
+data_JyskeBank <- data %>%
+  select(Date, JyskeBank, SP500)
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28, GC29,GC30, DependendVariable,Order_lags)
+```
+The significant features is chosen.
+
+## Saving the data set
+The Jyske Bank data set is now done and ready for forecast. It is saved as a cvs-file and uploaded on [Github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data)
+```{r}
+write_as_csv(data_JyskeBank,"DataCreationJyskeBank.csv")
+```
+
+```{r}
+rm(data_JyskeBank)
+```
+
+# Energy - Vestas
+## Selection of features
+Calculating granger causality for each value and *Vestas*. Five lags each chosen for this study.
+```{r}
+Order_lags <- 5
+DependendVariable <- data_GC$Vestas
+ 
+GC1 <- grangertest(DependendVariable ~MaerskA,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskA") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskA, DependendVariable))
+GC2 <- grangertest(DependendVariable ~MaerskB,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskB") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskB, DependendVariable))
+GC3 <- grangertest(DependendVariable ~ Ambu,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Ambu") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Ambu))
+GC4 <- grangertest(DependendVariable ~ Carlsberg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Carlsberg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Carlsberg))
+GC5 <- grangertest(DependendVariable ~ Coloplast,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Coloplast") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Coloplast))
+GC6 <- grangertest(DependendVariable ~ DanskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DanskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DanskeBank))
+GC7 <- grangertest(DependendVariable ~ DSV,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DSV") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DSV))
+GC8 <- grangertest(DependendVariable ~ FLSmidth,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "FLSmidth") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$FLSmidth))
+GC9 <- grangertest(DependendVariable ~ Genmab,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Genmab") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Genmab))
+GC10 <- grangertest(DependendVariable ~ GN,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GN") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$GN))
+GC11 <- grangertest(DependendVariable ~ JyskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "JyskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$JyskeBank))
+GC12 <- grangertest(DependendVariable ~ Lundbeck,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Lundbeck") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Lundbeck))
+GC13 <- grangertest(DependendVariable ~ NovoNordisk,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NovoNordisk") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NovoNordisk))
+GC14 <- grangertest(DependendVariable ~ Novozymes,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Novozymes") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Novozymes))
+GC15 <- grangertest(DependendVariable ~ RoyalUnibrew ,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "RoyalUnibrew ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$RoyalUnibrew))
+GC16 <- grangertest(DependendVariable ~ SimCorp,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SimCorp ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SimCorp))
+GC17 <- grangertest(DependendVariable ~ SydBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SydBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SydBank))
+GC18 <- grangertest(DependendVariable ~ Tryg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Tryg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Tryg))
+GC19 <- grangertest(DependendVariable ~ WilliamDemant,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "WilliamDemant") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$WilliamDemant))
+GC20 <- grangertest(DependendVariable ~ OilPrice,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "OilPrice") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$OilPrice))
+GC21 <- grangertest(DependendVariable ~ USD,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "USD") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$USD))
+GC22 <- grangertest(DependendVariable ~ GBP,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GBP") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GBP))
+GC23 <- grangertest(DependendVariable ~ NOK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NOK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NOK))
+GC24 <- grangertest(DependendVariable ~ SEK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SEK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SEK))
+GC25 <- grangertest(DependendVariable ~ CNY,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "CNY") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$CNY))
+GC26 <- grangertest(DependendVariable ~ C20index,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "C20index") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$C20index))
+GC27 <- grangertest(DependendVariable ~ TwoYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TwoYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TwoYearBond))
+GC28 <- grangertest(DependendVariable ~ TenYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TenYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TenYearBond))
+GC29 <- grangertest(DependendVariable ~ GoldFutures,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GoldFutures") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GoldFutures))
+GC30 <- grangertest(DependendVariable ~SP500,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SP500") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$SP500)) %>% as.data.frame()
+GC_Vestas<- rbind(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29, GC30) %>% as.data.frame()
+```
+The significant features is chosen.
+```{r}
+GC_Vestas %>%
+    filter(GrangerCausitality <= 0.01)
+```
+For *Vestas* the features *MaerskA*, *MaerskB*, *Baverian*, *Coloplast*, *FLSmidth*,  *Genmab*, *GN*, *Lundbeck*, *NovoNordisk*, *Tryg* and *USD/DKK* is chosen. These variables is selected including *Date* and the dependent value *Vestas* is chosen.
+```{r}
+data_Vestas <- data %>%
+  select(Date, Vestas, Genmab, NovoNordisk, USD, NOK, C20index, SP500)
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28, GC29, GC30,DependendVariable,Order_lags)
+```
+
+## Saving the data set
+The Vestas data set is now done and ready for forecast. It is saved as a cvs-file and uploaded on [Github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data)
+```{r}
+write_as_csv(data_Vestas,"DataCreationVestas.csv")
+```
+
+```{r}
+rm(data_Vestas)
+```
+
+# Consumption - Carlsberg
+## Selection of features
+Calculating granger causality for each value and *Carlsberg*. Five lags each chosen for this study.
+```{r}
+Order_lags <- 5
+DependendVariable <- data_GC$Carlsberg
+ 
+GC1 <- grangertest(DependendVariable ~MaerskA,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskA") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskA, DependendVariable))
+GC2 <- grangertest(DependendVariable ~MaerskB,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskB") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskB, DependendVariable))
+GC3 <- grangertest(DependendVariable ~ Ambu,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Ambu") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Ambu))
+GC4 <- grangertest(DependendVariable ~ Coloplast,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Coloplast") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Coloplast))
+GC5 <- grangertest(DependendVariable ~ DanskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DanskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DanskeBank))
+GC6 <- grangertest(DependendVariable ~ DSV,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DSV") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DSV))
+GC7 <- grangertest(DependendVariable ~ FLSmidth,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "FLSmidth") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$FLSmidth))
+GC8 <- grangertest(DependendVariable ~ Genmab,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Genmab") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Genmab))
+GC9 <- grangertest(DependendVariable ~ GN,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GN") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$GN))
+GC10 <- grangertest(DependendVariable ~ JyskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "JyskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$JyskeBank))
+GC11 <- grangertest(DependendVariable ~ Lundbeck,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Lundbeck") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Lundbeck))
+GC12 <- grangertest(DependendVariable ~ NovoNordisk,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NovoNordisk") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NovoNordisk))
+GC13 <- grangertest(DependendVariable ~ Novozymes,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Novozymes") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Novozymes))
+GC14 <- grangertest(DependendVariable ~ Tryg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Tryg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Tryg))
+GC15 <- grangertest(DependendVariable ~ RoyalUnibrew ,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "RoyalUnibrew ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$RoyalUnibrew))
+GC16 <- grangertest(DependendVariable ~ SimCorp,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SimCorp ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SimCorp))
+GC17 <- grangertest(DependendVariable ~ SydBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SydBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SydBank))
+GC18 <- grangertest(DependendVariable ~ Vestas,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Vestas") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Vestas))
+GC19 <- grangertest(DependendVariable ~ WilliamDemant,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "WilliamDemant") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$WilliamDemant))
+GC20 <- grangertest(DependendVariable ~ OilPrice,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "OilPrice") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$OilPrice))
+GC21 <- grangertest(DependendVariable ~ USD,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "USD") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$USD))
+GC22 <- grangertest(DependendVariable ~ GBP,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GBP") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GBP))
+GC23 <- grangertest(DependendVariable ~ NOK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NOK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NOK))
+GC24 <- grangertest(DependendVariable ~ SEK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SEK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SEK))
+GC25 <- grangertest(DependendVariable ~ CNY,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "CNY") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$CNY))
+GC26 <- grangertest(DependendVariable ~ C20index,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "C20index") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$C20index))
+GC27 <- grangertest(DependendVariable ~ TwoYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TwoYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TwoYearBond))
+GC28 <- grangertest(DependendVariable ~ TenYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TenYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TenYearBond))
+GC29 <- grangertest(DependendVariable ~ GoldFutures,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GoldFutures") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GoldFutures))
+GC30 <- grangertest(DependendVariable ~SP500,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SP500") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$SP500)) %>% as.data.frame()
+GC_Carlsberg<- rbind(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29, GC30) %>% as.data.frame()
+```
+The significant features is chosen.
+```{r}
+GC_Carlsberg %>%
+    filter(GrangerCausitality <= 0.01)
+```
+
+For *Carlsberg* the features *DanskeBank*, *DSV*, *GN*, *JyskeBank*, *Tryg* and *OilPrice*  is chosen. These variables is selected including *Date* and the dependent value *Carlsberg* is chosen.
+```{r}
+data_Carlsberg <- data %>%
+  select(Date, Carlsberg,DanskeBank, DSV, OilPrice, SP500)
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28, GC29,GC30,DependendVariable,Order_lags)
+```
+
+## Saving the data set
+The Carlsberg data set is now done and ready for forecast. It is saved as a cvs-file and uploaded on [Github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data)
+```{r}
+write_as_csv(data_Carlsberg,"DataCreationCarlsberg.csv")
+```
+
+```{r}
+rm(data_Carlsberg)
+```
+
+
+# Technology - SimCorp
+## Selection of features
+Calculating granger causality for each value and *Vestas*. Five lags each chosen for this study.
+```{r}
+Order_lags <- 5
+DependendVariable <- data_GC$SimCorp
+ 
+GC1 <- grangertest(DependendVariable ~MaerskA,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskA") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskA, DependendVariable))
+GC2 <- grangertest(DependendVariable ~MaerskB,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "MaerskB") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(data_GC$MaerskB, DependendVariable))
+GC3 <- grangertest(DependendVariable ~ Ambu,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Ambu") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Ambu))
+GC4 <- grangertest(DependendVariable ~ Carlsberg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Carlsberg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Carlsberg))
+GC5 <- grangertest(DependendVariable ~ Coloplast,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Coloplast") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Coloplast))
+GC6 <- grangertest(DependendVariable ~ DanskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DanskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DanskeBank))
+GC7 <- grangertest(DependendVariable ~ DSV,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "DSV") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$DSV))
+GC8 <- grangertest(DependendVariable ~ FLSmidth,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "FLSmidth") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$FLSmidth))
+GC9 <- grangertest(DependendVariable ~ Genmab,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Genmab") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Genmab))
+GC10 <- grangertest(DependendVariable ~ GN,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GN") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$GN))
+GC11 <- grangertest(DependendVariable ~ JyskeBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "JyskeBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$JyskeBank))
+GC12 <- grangertest(DependendVariable ~ Lundbeck,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Lundbeck") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$Lundbeck))
+GC13 <- grangertest(DependendVariable ~ NovoNordisk,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NovoNordisk") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NovoNordisk))
+GC14 <- grangertest(DependendVariable ~ Novozymes,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Novozymes") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Novozymes))
+GC15 <- grangertest(DependendVariable ~ RoyalUnibrew ,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "RoyalUnibrew ") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$RoyalUnibrew))
+GC16 <- grangertest(DependendVariable ~ SydBank,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SydBank") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SydBank))
+GC17 <- grangertest(DependendVariable ~ Tryg,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Tryg") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Tryg))
+GC18 <- grangertest(DependendVariable ~ Vestas,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "Vestas") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$Vestas))
+GC19 <- grangertest(DependendVariable ~ WilliamDemant,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "WilliamDemant") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$WilliamDemant))
+GC20 <- grangertest(DependendVariable ~ OilPrice,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "OilPrice") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$OilPrice))
+GC21 <- grangertest(DependendVariable ~ USD,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "USD") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$USD))
+GC22 <- grangertest(DependendVariable ~ GBP,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GBP") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GBP))
+GC23 <- grangertest(DependendVariable ~ NOK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "NOK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$NOK))
+GC24 <- grangertest(DependendVariable ~ SEK,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SEK") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$SEK))
+GC25 <- grangertest(DependendVariable ~ CNY,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "CNY") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$CNY))
+GC26 <- grangertest(DependendVariable ~ C20index,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "C20index") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$C20index))
+GC27 <- grangertest(DependendVariable ~ TwoYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TwoYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TwoYearBond))
+GC28 <- grangertest(DependendVariable ~ TenYearBond,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "TenYearBond") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$TenYearBond))
+GC29 <- grangertest(DependendVariable ~ GoldFutures,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "GoldFutures") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality) %>% mutate(Correlation = cor(DependendVariable , data_GC$GoldFutures))
+GC30 <- grangertest(DependendVariable ~SP500,  order = Order_lags, data = data_GC) %>%
+ drop_na() %>% mutate(Company = "SP500") %>% rename("GrangerCausitality"="Pr(>F)" ) %>%select(Company,GrangerCausitality)%>% mutate(Correlation = cor(DependendVariable , data_GC$SP500)) %>% as.data.frame()
+GC_SimCorp <- rbind(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28,GC29,GC30) %>% as.data.frame()
+```
+The significant features is chosen.
+```{r}
+GC_SimCorp %>%
+    filter(GrangerCausitality <= 0.01)
+```
+For *SimCorp* the features *MaerskA*, *MaerskB*, *Baverian*, *Coloplast*, *FLSmidth*,  *Genmab*, *GN*, *Lundbeck*, *NovoNordisk*, *Tryg* and *USD/DKK* is chosen. These variables is selected including *Date* and the dependent value *Vestas* is chosen.
+```{r}
+data_SimCorp <- data %>%
+  select(Date, SimCorp,  DSV, Genmab, SydBank, WilliamDemant, SP500)
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(GC1,GC2,GC3,GC4,GC5,GC6,GC7,GC8,GC9,GC10,GC11,GC12,GC13,GC14,GC15,GC16,GC17,GC18,GC19,GC20,GC21,GC22,GC23,GC24,GC25,GC26,GC27,GC28, GC29, GC30, DependendVariable, Order_lags)
+```
+
+## Saving the data set
+The Vestas data set is now done and ready for forecast. It is saved as a cvs-file and uploaded on [Github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data)
+```{r}
+write_as_csv(data_SimCorp,"DataCreationSimCorp.csv")
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(data_SimCorp)
+```
+
+# Total table of Granger Causality
+Creating a table for all Granger Causality test
+```{r}
+gc_total <- GC_Carlsberg %>% rename(Carlsberg = GrangerCausitality) %>% select(-Correlation) %>% full_join(GC_Genmab, by = "Company") %>% rename(Genmab = GrangerCausitality)%>% select(-Correlation) %>% left_join(GC_JyskeBank, by = "Company") %>% rename("Jyske Bank" = GrangerCausitality)%>% select(-Correlation) %>% left_join(GC_MaerskB, by = "Company") %>% rename("Maersk B" = GrangerCausitality)%>% select(-Correlation) %>% left_join(GC_Vestas, by = "Company") %>% rename(Vestas = GrangerCausitality)%>% select(-Correlation) %>% arrange(Company) %>% left_join(GC_SimCorp, by = "Company") %>% rename("SimCorp" = GrangerCausitality)%>% select(-Correlation)  %>% mutate(Carlsberg = round(Carlsberg, 3), Genmab = round(Genmab, 3), `Jyske Bank`= round(`Jyske Bank`, 3), `Maersk B`= round(`Maersk B`, 3), Vestas = round(Vestas, 3), SimCorp = round(SimCorp, 3))
+gc_total 
+```
+
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(data_GC, GC_Carlsberg, GC_Genmab, GC_JyskeBank, GC_MaerskB, GC_SimCorp, GC_Vestas, gc_total)
+```
+
+
+
+
+

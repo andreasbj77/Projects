@@ -1,0 +1,386 @@
+---
+title: "Econometrics - Vestas"
+author: "Andreas Borup Joergensen, Mette Koch Moeller, Robert Hoestrup"
+date: "04-03-2021"
+output:
+  html_notebook:
+    code_folding: show
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+---
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE,
+                     message=FALSE,
+                     comment=FALSE, 
+                     fig.align="center"
+                     )
+```
+
+Downloading the packages
+```{r}
+library(tidyverse) #Collection of all the good stuff like dplyr, ggplot2 ect.
+library(magrittr) #For advanced piping
+library(ggpubr) #package that helps mixing multiple plots on the same page
+library(wooldridge)
+library(car)
+library(lmtest)
+library(sandwich)
+library(quantmod)
+library(tseries)
+library(urca)
+library(vars)
+library(forecast)
+library(nortsTest)
+library(yardstick)
+library(midasr) # Brugt til static forecasting
+#'forecast', 'midasr', 'nortsTest', 'quantmod', 'sandwich', 'tseries', 'urca', 'vars', 'wooldridge'
+```
+
+Loading data from GitHub
+
+```{r} 
+data <- read.csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Final_data/DataCreationVestas.csv")
+```
+
+# Preprocessing
+We split up our data set into training, testing, training+testing and forecasting. Splitting up the data makes it possible for us to make out-of-sample forecasting. The training+testing data frame is created so we can make one step ahead forecasts in the testing period.
+```{r}
+training <- filter(data, Date <= "2017-12-29")
+testing <- filter(data, Date > "2017-12-29" & Date <= "2018-12-28")
+forecast <-  filter(data, Date > "2018-12-28")
+TrainAndTest <- filter(data, Date <= "2018-12-28")
+FullPeriod <- filter(data, Date <= "2019-12-27")
+```
+The data is converted into time series since this portion of the code uses time series econometrics for Maersk B. 
+```{r}
+#Training
+data_train <- xts(training$Vestas, order.by = as.Date(training$Date))
+#Test
+data_test <- xts(testing$Vestas, order.by = as.Date(testing$Date)) %>% as.data.frame()
+#Training+Test
+data_traintest <- xts(TrainAndTest$Vestas, order.by = as.Date(TrainAndTest$Date))
+#Forecast
+data_forecast <- xts(forecast$Vestas, order.by = as.Date(forecast$Date)) %>% as.data.frame()
+#Full Period
+data_full <- xts(FullPeriod$Vestas, order.by = as.Date(FullPeriod$Date))
+```
+For convenience the stock is saved as a text for further use. 
+```{r}
+company <- "Vestas"
+```
+
+# Testing for stationarity
+To test whether the data set is stationary, we perform ADF-test on the training data. The null hypotesis is the model is statinary.
+```{r}
+data_train  %>% adf.test() %>% unlist() %>% as.tibble() %>% 
+  mutate(Company = company, "Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "P-Value" = lead(`Alternative Hypothesis`)) %>% as.data.frame() %>%  head(1) %>% 
+  dplyr::select(Company, `Dickey Fuller`, `Lag Order`, `P-Value`, `Alternative Hypothesis`)
+```
+## First-order differentiating
+First-order differentiating the data set and running ADF- test again.
+```{r}
+data_train  %>% diff() %>% na.omit() %>% adf.test() %>% unlist() %>% as.tibble() %>% mutate(Company = company, "Dickey Fuller" = value, "Lag Order" = lead(value), "Alternative Hypothesis" = lead(`Lag Order`), "P-Value" = lead(`Alternative Hypothesis`)) %>% as.data.frame() %>%  head(1) %>%  dplyr::select(Company, `Dickey Fuller`, `Lag Order`, `P-Value`, `Alternative Hypothesis`)
+```
+The data set is stationary when it is differentiated one time. The models is a ARIMA(p,1,q). 
+
+# Testing for heteroscedasticity
+Using Lagrange Multiplier and Box-Ljung test to test for heteroscedasticity. This is done by using the command *arch.test()*. The command uses Lagrange Multiplier test and a Portmanteau Q test (Box-Ljung test).  
+
+```{r}
+data_train  %>% arch.test()  %>% unlist() %>% as.tibble() %>%  mutate(Company = company, "X-squared" = value, df = lead(value), "P-Value" =  lead(df), "Alternative Hypothesis" = lead(lead(lead(`P-Value`))), "P-Value" =ifelse(`P-Value` == 0,  "< 2.2e-16", `P-Value`)) %>% head(1) %>% dplyr::select(Company, `X-squared`, df , `P-Value`, `Alternative Hypothesis`) 
+```
+
+# ARIMA
+
+Testing which models have the lowest AIC. This is done by using the command *auto.arima()*.
+```{r} 
+test_order <- auto.arima(data_train,  ic="aic", trace=TRUE) #(3,1,0), (3,1,0) with drift, ARIMA(3,1,1), ARIMA(2,1,1).
+```
+Building the models
+```{r}
+model1_arima <- Arima(data_train, order=c(3,1,0))
+model2_arima <- Arima(data_train, order=c(3,1,0), include.drift=TRUE)
+model3_arima <- Arima(data_train, order=c(3,1,1))
+model4_arima <- Arima(data_train, order=c(2,1,1))
+
+```
+out-of-sample forecasting
+```{r}
+arima_refit1 <- Arima(data_traintest, model=model1_arima) 
+arima_fc1 <- window(fitted(arima_refit1), start = 2000) %>% as.data.frame()
+
+arima_refit2 <- Arima(data_traintest, model=model2_arima) 
+arima_fc2 <- window(fitted(arima_refit2), start = 2000) %>% as.data.frame()
+
+arima_refit3 <- Arima(data_traintest, model=model3_arima) 
+arima_fc3 <- window(fitted(arima_refit3), start = 2000) %>% as.data.frame()
+
+arima_refit4 <- Arima(data_traintest, model=model4_arima) 
+arima_fc4 <- window(fitted(arima_refit4), start = 2000) %>% as.data.frame()
+```
+We combine the forecasted and actual values for simplicity. We rename the variables for clarity.
+```{r}
+arima_test_fitted1 <- cbind(data_test, arima_fc1) %>% rename(truth = V1, pred = x)
+arima_test_fitted2 <- cbind(data_test, arima_fc2) %>% rename(truth = V1, pred = x)
+arima_test_fitted3 <- cbind(data_test, arima_fc3) %>% rename(truth = V1, pred = x)
+arima_test_fitted4 <- cbind(data_test, arima_fc4) %>% rename(truth = V1, pred = x)
+```
+Calculating RMSE, MAE, and MAPE.
+```{r}
+arima_RMSE1 <- arima_test_fitted1 %>% rmse(truth, pred) 
+arima_MAE1 <- arima_test_fitted1 %>% mae(truth, pred)
+arima_MAPE1 <- arima_test_fitted1 %>% mape(truth, pred) 
+arima_eval1 <- cbind(arima_RMSE1$.estimate, arima_MAE1$.estimate, arima_MAPE1$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(3,1,0)") %>% relocate(Model)
+arima_eval1
+
+arima_RMSE2 <- arima_test_fitted2 %>% rmse(truth, pred) 
+arima_MAE2 <- arima_test_fitted2 %>% mae(truth, pred)
+arima_MAPE2 <- arima_test_fitted2 %>% mape(truth, pred) 
+arima_eval2 <- cbind(arima_RMSE2$.estimate, arima_MAE2$.estimate, arima_MAPE2$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(3,1,0) with drift") %>% relocate(Model)
+
+
+arima_RMSE3 <- arima_test_fitted3 %>% rmse(truth, pred) 
+arima_MAE3 <- arima_test_fitted3 %>% mae(truth, pred)
+arima_MAPE3 <- arima_test_fitted3 %>% mape(truth, pred) 
+arima_eval3 <- cbind(arima_RMSE3$.estimate, arima_MAE3$.estimate, arima_MAPE3$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(3,1,1)") %>% relocate(Model)
+
+
+arima_RMSE4 <- arima_test_fitted4 %>% rmse(truth, pred) 
+arima_MAE4 <- arima_test_fitted4 %>% mae(truth, pred)
+arima_MAPE4 <- arima_test_fitted4 %>% mape(truth, pred) 
+arima_eval4 <- cbind(arima_RMSE4$.estimate, arima_MAE4$.estimate, arima_MAPE4$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(2,1,1)") %>% relocate(Model)
+
+arima_eval <- rbind(arima_eval2, arima_eval1, arima_eval3, arima_eval4)
+arima_eval # arima(3,1,0) with drift
+```
+Renameing the models with lowest MAPE, and clearning the enviroment.
+```{r}
+model_arima <- model2_arima
+
+
+rm(model1_arima, model2_arima, model3_arima, model4_arima)
+```
+
+# ARIMA with features
+
+Creating timeseries for training and train and testing data.
+
+
+Creating timeseries for training and train and testing data.The variables are chosen based on Granger test in other R-script.
+We lag the series which turns the first observation into NA. we replace the NA with the second observation.
+
+```{r}
+
+variabel1 <- xts(training$Genmab, order.by = as.Date(training$Date))
+variabel1 <- stats::lag(variabel1) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel1$V1, order.by = as.Date(training$Date))
+
+variabel1TT <- xts(TrainAndTest$Genmab, order.by = as.Date(TrainAndTest$Date))
+variabel1TT <- stats::lag(variabel1TT) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel1TT$V1, order.by = as.Date(TrainAndTest$Date)) 
+
+
+variabel2 <- xts(training$NovoNordisk, order.by = as.Date(training$Date))
+variabel2 <- stats::lag(variabel2) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel2$V1, order.by = as.Date(training$Date))
+
+variabel2TT <- xts(TrainAndTest$NovoNordisk, order.by = as.Date(TrainAndTest$Date))
+variabel2TT <- stats::lag(variabel2TT) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel2TT$V1, order.by = as.Date(TrainAndTest$Date)) 
+
+
+variabel3 <- xts(training$USD, order.by = as.Date(training$Date))
+variabel3 <- stats::lag(variabel3) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel3$V1, order.by = as.Date(training$Date)) 
+
+variabel3TT <- xts(TrainAndTest$USD, order.by = as.Date(TrainAndTest$Date))
+variabel3TT <- stats::lag(variabel3TT) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel3TT$V1, order.by = as.Date(TrainAndTest$Date)) 
+
+
+variabel4 <- xts(training$NOK, order.by = as.Date(training$Date))
+variabel4 <- stats::lag(variabel4) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel4$V1, order.by = as.Date(training$Date))
+
+variabel4TT <- xts(TrainAndTest$NOK, order.by = as.Date(TrainAndTest$Date))
+variabel4TT <- stats::lag(variabel4TT) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel4TT$V1, order.by = as.Date(TrainAndTest$Date)) 
+
+
+variabel5 <- xts(training$C20index, order.by = as.Date(training$Date))
+variabel5 <- stats::lag(variabel5) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel5$V1, order.by = as.Date(training$Date)) 
+
+variabel5TT <- xts(TrainAndTest$C20index, order.by = as.Date(TrainAndTest$Date))
+variabel5TT <- stats::lag(variabel5TT) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel5TT$V1, order.by = as.Date(TrainAndTest$Date))
+
+variabel6 <- xts(training$SP500, order.by = as.Date(training$Date))
+variabel6 <- stats::lag(variabel6) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel6$V1, order.by = as.Date(training$Date))  
+
+variabel6TT <- xts(TrainAndTest$SP500, order.by = as.Date(TrainAndTest$Date))
+variabel6TT <- stats::lag(variabel6TT) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel6TT$V1, order.by = as.Date(TrainAndTest$Date)) 
+
+
+```
+
+Bind the variables together
+
+```{r}
+variables_train <- cbind(variabel1, variabel2, variabel3, variabel4, variabel5, variabel6)
+variables_TT <- cbind(variabel1TT, variabel2TT, variabel3TT, variabel4TT, variabel5TT, variabel6TT)
+
+
+rm(variabel1, variabel2, variabel3, variabel4, variabel5, variabel6, variabel7, variabel8, variabel9, variabel10, variabel1TT, variabel2TT, variabel3TT, variabel4TT, variabel5TT, variabel6TT, variabel7TT, variabel8TT, variabel9TT, variabel10)
+
+```
+
+Building the model
+
+```{r}
+
+model1_arima <- auto.arima(data_train, ic="aic", xreg = variables_train, trace=T)
+summary(model1_arima)
+```
+
+Because that we can see, that the "best" model follows an ARIMAX(0,0,5), where all p>0 got infinity AIC, we run the model again with pmax=0, and qmax=100.
+
+```{r}
+model1_arima <- auto.arima(data_train, max.p=0, max.q=100, ic="aic", xreg = variables_train, trace=T)
+summary(model1_arima)
+```
+
+```{r}
+model1_arima_features <- Arima(data_train, order=c(0,0,36), xreg = variables_train)
+model2_arima_features <- Arima(data_train, order=c(0,0,35), xreg = variables_train)
+model3_arima_features <- Arima(data_train, order=c(0,0,34), xreg = variables_train)
+model4_arima_features <- Arima(data_train, order=c(0,0,33), xreg = variables_train)
+
+autoplot(model1_arima_features)
+autoplot(model2_arima_features)
+autoplot(model3_arima_features)
+autoplot(model4_arima_features)
+```
+
+Creating out of sample forecasts
+
+```{r}
+arima_refit1 <- Arima(data_traintest, model=model1_arima_features, xreg = variables_TT)
+arima_fc1 <- window(fitted(arima_refit1), start = 2000) %>% as.data.frame()
+
+arima_refit2 <- Arima(data_traintest, model=model2_arima_features, xreg = variables_TT)
+arima_fc2 <- window(fitted(arima_refit2), start = 2000) %>% as.data.frame()
+
+arima_refit3 <- Arima(data_traintest, model=model3_arima_features, xreg = variables_TT)
+arima_fc3 <- window(fitted(arima_refit3), start = 2000) %>% as.data.frame()
+
+arima_refit4 <- Arima(data_traintest, model=model4_arima_features, xreg = variables_TT)
+arima_fc4 <- window(fitted(arima_refit4), start = 2000) %>% as.data.frame()
+```
+
+Bind actual and predicted values together
+
+```{r}
+arima_test_fitted1 <- cbind(data_test, arima_fc1) %>% rename(truth = V1, pred = x)
+arima_test_fitted2 <- cbind(data_test, arima_fc2) %>% rename(truth = V1, pred = x)
+arima_test_fitted3 <- cbind(data_test, arima_fc3) %>% rename(truth = V1, pred = x)
+arima_test_fitted4 <- cbind(data_test, arima_fc4) %>% rename(truth = V1, pred = x)
+```
+
+
+Calcualateing Evaluation stats
+
+```{r}
+arima_RMSE1 <- arima_test_fitted1 %>% rmse(truth, pred) 
+arima_MAE1 <- arima_test_fitted1 %>% mae(truth, pred)
+arima_MAPE1 <- arima_test_fitted1 %>% mape(truth, pred) 
+arima_eval1 <- cbind(arima_RMSE1$.estimate, arima_MAE1$.estimate, arima_MAPE1$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(0,0,36) with Features") %>% relocate(Model)
+arima_eval1
+
+arima_RMSE2 <- arima_test_fitted2 %>% rmse(truth, pred) 
+arima_MAE2 <- arima_test_fitted2 %>% mae(truth, pred)
+arima_MAPE2 <- arima_test_fitted2 %>% mape(truth, pred) 
+arima_eval2 <- cbind(arima_RMSE2$.estimate, arima_MAE2$.estimate, arima_MAPE2$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(0,0,35) with Features") %>% relocate(Model)
+
+
+arima_RMSE3 <- arima_test_fitted3 %>% rmse(truth, pred) 
+arima_MAE3 <- arima_test_fitted3 %>% mae(truth, pred)
+arima_MAPE3 <- arima_test_fitted3 %>% mape(truth, pred) 
+arima_eval3 <- cbind(arima_RMSE3$.estimate, arima_MAE3$.estimate, arima_MAPE3$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(0,0,34) with Features") %>% relocate(Model)
+
+
+arima_RMSE4 <- arima_test_fitted4 %>% rmse(truth, pred) 
+arima_MAE4 <- arima_test_fitted4 %>% mae(truth, pred)
+arima_MAPE4 <- arima_test_fitted4 %>% mape(truth, pred) 
+arima_eval4 <- cbind(arima_RMSE4$.estimate, arima_MAE4$.estimate, arima_MAPE4$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") %>% mutate(Model = "ARIMA(0,0,33) with Features") %>% relocate(Model)
+
+arima_eval <- rbind(arima_eval, arima_eval1, arima_eval2, arima_eval3, arima_eval4) %>% arrange(MAPE)
+arima_eval
+```
+# Forecast
+
+First we choose the model from the out of sample forecasts with the lowest MAPE and RMSE, in this case is it the ARIMA(3,1,0) with drift (model_arima)
+
+
+```{r}
+model_Vestas<- model_arima
+
+
+summary(model_arima)
+```
+
+Creating xreg for the full period.
+```{r}
+variabel1FC <- xts(FullPeriod$Genmab, order.by = as.Date(FullPeriod$Date))
+variabel1FC <- stats::lag(variabel1FC) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel1FC$V1, order.by = as.Date(FullPeriod$Date))
+
+variabel2FC <- xts(FullPeriod$NovoNordisk, order.by = as.Date(FullPeriod$Date))
+variabel2FC <- stats::lag(variabel2FC) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel2FC$V1, order.by = as.Date(FullPeriod$Date))
+
+variabel3FC <- xts(FullPeriod$USD, order.by = as.Date(FullPeriod$Date))
+variabel3FC <- stats::lag(variabel3FC) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel3FC$V1, order.by = as.Date(FullPeriod$Date))
+
+variabel4FC <- xts(FullPeriod$NOK, order.by = as.Date(FullPeriod$Date))
+variabel4FC <- stats::lag(variabel4FC) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel4FC$V1, order.by = as.Date(FullPeriod$Date))
+
+variabel5FC <- xts(FullPeriod$C20index, order.by = as.Date(FullPeriod$Date))
+variabel5FC <- stats::lag(variabel5FC) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel5FC$V1, order.by = as.Date(FullPeriod$Date))
+
+variabel6FC <- xts(FullPeriod$SP500, order.by = as.Date(FullPeriod$Date))
+variabel6FC <- stats::lag(variabel6FC) %>% as.data.frame() %>% mutate(`V1` = ifelse(is.na(`V1`), lead(`V1`,1), `V1`)) %>% xts(variabel6FC$V1, order.by = as.Date(FullPeriod$Date))
+
+variables_FC <- cbind(variabel1FC, variabel2FC, variabel3FC, variabel4FC, variabel5FC, variabel6FC)
+
+rm(variabel1FC, variabel2FC, variabel3FC, variabel4FC, variabel5FC, variabel6FC)
+```
+
+Creating the forecasts using the best model
+
+```{r}
+arima_refit_forecast <- Arima(data_full, model=model_Vestas)
+arima_fc_forecast <- window(fitted(arima_refit_forecast), start = 2248) %>% as.data.frame()
+```
+
+Binding predicted and actual values together
+```{r}
+arima_actual_forecasts <- cbind(data_forecast, arima_fc_forecast) %>% rename(truth = V1, pred = x)
+```
+
+```{r}
+arima_actual_forecasts %>% write.csv("ARIMA_Vestas_Forecast_Series")
+```
+
+
+Calculateing evaluation statistics
+
+```{r}
+arima_RMSE_forecast <- arima_actual_forecasts %>% rmse(truth, pred) 
+arima_MAE_forecast <- arima_actual_forecasts %>% mae(truth, pred)
+arima_MAPE_forecast <- arima_actual_forecasts %>% mape(truth, pred) 
+arima_eval_forecast <- cbind(arima_RMSE_forecast$.estimate, arima_MAE_forecast$.estimate, arima_MAPE_forecast$.estimate) %>% as.data.frame() %>% rename("RMSE" = "V1", "MAE" = "V2", "MAPE" = "V3") #%>% mutate(Model = "ARIMA(0,0,28) with Features") %>% relocate(Model)
+arima_eval_forecast
+```

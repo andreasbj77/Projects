@@ -1,0 +1,547 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE,
+                     message=FALSE,
+                     comment=FALSE, 
+                     fig.align="center"
+                     )
+```
+
+Downloading the packages
+```{r}
+library(magrittr) #For advanced piping
+library(tidyverse)
+library(tidymodels)
+library(ggpubr)
+```
+
+
+# ARIMA
+
+```{r}
+Vestas_Arima <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ARIMA_Vestas_Forecast_Series") %>% select(truth, pred)
+
+Genmab_Arima <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ARIMA_Genmab_Forecast_Series") %>% select(truth, pred)
+
+Carlsberg_Arima <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ARIMA_Carlsberg_Forecast_Series") %>% select(truth, pred)
+
+JyskeBank_Arima <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ARIMA_JyskeBank_Forecast_Series") %>% select(truth, pred)
+
+MaerskB_Arima <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ARIMA_MaerskB_Forecast_Series") %>% select(truth, pred)
+
+SimCorp_Arima <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ARIMA_SimCorp_Forecast_Series") %>% select(truth, pred)
+```
+
+
+# ANN
+
+```{r}
+Vestas_ANN <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ML_forecast_Vestas") %>% select(Date, truth, prediction)
+
+Genmab_ANN <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ML_forecast_Genmab") %>% select(Date, truth, prediction)
+
+Carlsberg_ANN <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ML_forecast_Carlsberg") %>% select(Date, truth, prediction)
+
+JyskeBank_ANN <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ML_forecast_JyskeBank") %>% select(Date, truth, prediction)
+
+MaerskB_ANN <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ML_forecast_MaerskB") %>% select(Date, truth, prediction)
+
+SimCorp_ANN <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Forecast_series/ML_forecast_SimCorp") %>% select(Date, truth, prediction)
+```
+
+```{r}
+
+eval_Carlsberg_ARIMA <- tibble(
+  Date = Carlsberg_ANN[1:246,] %>% pull(Date),
+  Truth = Carlsberg_Arima[2:247,] %>% pull(truth),
+  Prediction = Carlsberg_Arima[2:247,] %>% pull(pred)
+)
+
+eval_Carlsberg_ANN <- tibble(
+  Date = Carlsberg_ANN[1:246,] %>% pull(Date),
+  Truth = Carlsberg_ANN[1:246,] %>% pull(truth),
+  Prediction = Carlsberg_ANN[1:246,] %>% pull(prediction)
+)
+
+eval_Genmab_ARIMA <- tibble(
+  Date = Genmab_ANN[1:246,] %>% pull(Date),
+  Truth = Genmab_Arima[2:247,] %>% pull(truth),
+  Prediction = Genmab_Arima[2:247,] %>% pull(pred)
+)
+
+eval_Genmab_ANN <- tibble(
+  Date = Genmab_ANN[1:246,] %>% pull(Date),
+  Truth = Genmab_ANN[1:246,] %>% pull(truth),
+  Prediction = Genmab_ANN[1:246,] %>% pull(prediction)
+)
+
+eval_JyskeBank_ARIMA <- tibble(
+  Date = JyskeBank_ANN[1:246,] %>% pull(Date),
+  Truth = JyskeBank_Arima[2:247,] %>% pull(truth),
+  Prediction = JyskeBank_Arima[2:247,] %>% pull(pred)
+)
+
+eval_JyskeBank_ANN <- tibble(
+  Date = JyskeBank_ANN[1:246,] %>% pull(Date),
+  Truth = JyskeBank_ANN[1:246,] %>% pull(truth),
+  Prediction = JyskeBank_ANN[1:246,] %>% pull(prediction)
+)
+
+eval_MaerskB_ARIMA <- tibble(
+  Date = MaerskB_ANN[1:246,] %>% pull(Date),
+  Truth = MaerskB_Arima[2:247,] %>% pull(truth),
+  Prediction = MaerskB_Arima[2:247,] %>% pull(pred)
+)
+
+eval_MaerskB_ANN <- tibble(
+  Date = MaerskB_ANN[1:246,] %>% pull(Date),
+  Truth = MaerskB_ANN[1:246,] %>% pull(truth),
+  Prediction = MaerskB_ANN[1:246,] %>% pull(prediction)
+)
+
+eval_SimCorp_ARIMA <- tibble(
+  Date = SimCorp_ANN[1:246,] %>% pull(Date),
+  Truth = SimCorp_Arima[2:247,] %>% pull(truth),
+  Prediction = SimCorp_Arima[2:247,] %>% pull(pred)
+)
+
+eval_SimCorp_ANN <- tibble(
+  Date = SimCorp_ANN[1:246,] %>% pull(Date),
+  Truth = SimCorp_ANN[1:246,] %>% pull(truth),
+  Prediction = SimCorp_ANN[1:246,] %>% pull(prediction)
+)
+
+eval_Vestas_ARIMA <- tibble(
+  Date = Vestas_ANN[1:246,] %>% pull(Date),
+  Truth = Vestas_Arima[2:247,] %>% pull(truth),
+  Prediction = Vestas_Arima[2:247,] %>% pull(pred)
+)
+
+eval_Vestas_ANN <- tibble(
+  Date = Vestas_ANN[1:246,] %>% pull(Date),
+  Truth = Vestas_ANN[1:246,] %>% pull(truth),
+  Prediction = Vestas_ANN[1:246,] %>% pull(prediction)
+)
+```
+
+
+# Plots
+
+## Carlsberg
+
+```{r}
+plot_ARIMA_Carlsberg <- eval_Carlsberg_ARIMA %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  scale_color_manual(values = c("red", "black")) +
+  ylab("Price") +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position= "none") +
+  ggtitle("ARIMA")
+
+plot_ANN_Carlsberg <- eval_Carlsberg_ANN %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  ylab("Price") +
+  scale_color_manual(values = c("red", "black")) +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position="none") +
+  ggtitle("ANN")
+
+ggarrange(plot_ARIMA_Carlsberg, plot_ANN_Carlsberg, ncol = 1, common.legend = TRUE, legend = "bottom")
+```
+
+## Genmab
+
+```{r}
+plot_ARIMA_Genmab <- eval_Genmab_ARIMA %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  scale_color_manual(values = c("red", "black")) +
+  ylab("Price") +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position= "none") +
+  ggtitle("ARIMA")
+
+plot_ANN_Genmab <- eval_Genmab_ANN %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  ylab("Price") +
+  scale_color_manual(values = c("red", "black")) +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position="none") +
+  ggtitle("ANN")
+
+ggarrange(plot_ARIMA_Genmab, plot_ANN_Genmab, ncol = 1, common.legend = TRUE, legend = "bottom")
+```
+
+## JyskeBank
+
+```{r}
+plot_ARIMA_JyskeBank <- eval_JyskeBank_ARIMA %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  scale_color_manual(values = c("red", "black")) +
+  ylab("Price") +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position= "none") +
+  ggtitle("ARIMA")
+
+plot_ANN_JyskeBank <- eval_JyskeBank_ANN %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  ylab("Price") +
+  scale_color_manual(values = c("red", "black")) +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position="none") +
+  ggtitle("ANN")
+
+ggarrange(plot_ARIMA_JyskeBank, plot_ANN_JyskeBank, ncol = 1, common.legend = TRUE, legend = "bottom")
+```
+
+## MaerskB
+
+```{r}
+plot_ARIMA_MaerskB <- eval_MaerskB_ARIMA %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  scale_color_manual(values = c("red", "black")) +
+  ylab("Price") +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position= "none") +
+  ggtitle("ARIMA")
+
+plot_ANN_MaerskB <- eval_MaerskB_ANN %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  ylab("Price") +
+  scale_color_manual(values = c("red", "black")) +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position="none") +
+  ggtitle("ANN")
+
+ggarrange(plot_ARIMA_MaerskB, plot_ANN_MaerskB, ncol = 1, common.legend = TRUE, legend = "bottom")
+```
+
+## SimCorp
+
+```{r}
+plot_ARIMA_SimCorp <- eval_SimCorp_ARIMA %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  scale_color_manual(values = c("red", "black")) +
+  ylab("Price") +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position= "none") +
+  ggtitle("ARIMA")
+
+plot_ANN_SimCorp <- eval_SimCorp_ANN %>%  
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  ylab("Price") +
+  scale_color_manual(values = c("red", "black")) +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position="none") +
+  ggtitle("ANN")
+
+ggarrange(plot_ARIMA_SimCorp, plot_ANN_SimCorp, ncol = 1, common.legend = TRUE, legend = "bottom")
+```
+
+## Vestas
+
+```{r}
+plot_ARIMA_Vestas <- eval_Vestas_ARIMA %>% 
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  scale_color_manual(values = c("red", "black")) +
+  ylab("Price") +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position= "none") +
+  ggtitle("ARIMA")
+
+plot_ANN_Vestas <- eval_Vestas_ANN %>%   
+  pivot_longer(-Date) %>%
+  rename(Data = name) %>%
+  ggplot(aes(x = Date, y = value, col = Data, size = Data, alpha = Data)) +
+  geom_line() +
+  scale_alpha_manual(values=c(0.7,1)) +
+  scale_size_manual(values = c(0.5,0.5)) +
+  ylab("Price") +
+  scale_color_manual(values = c("red", "black")) +
+  scale_x_date(date_labels = "%b",date_breaks = "months") +
+  theme(legend.position="none") +
+  ggtitle("ANN")
+
+ggarrange(plot_ARIMA_Vestas, plot_ANN_Vestas, ncol = 1, common.legend = TRUE, legend = "bottom")
+```
+
+# RMSE and MAPE
+
+## Carlsberg
+
+```{r}
+RMSE_Carlsberg_ARIMA <- eval_Carlsberg_ARIMA %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_Carlsberg_ARIMA <- eval_Carlsberg_ARIMA %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_Carlsberg_ARIMA %<>% rename(RMSE = .estimate)
+MAPE_Carlsberg_ARIMA %<>% rename(MAPE = .estimate)
+Carlsberg_ARIMA_res <- cbind(RMSE_Carlsberg_ARIMA, MAPE_Carlsberg_ARIMA)
+Carlsberg_ARIMA_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "Carlsberg")
+```
+
+```{r}
+RMSE_Carlsberg_ANN <- eval_Carlsberg_ANN %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_Carlsberg_ANN <- eval_Carlsberg_ANN %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_Carlsberg_ANN %<>% rename(RMSE = .estimate)
+MAPE_Carlsberg_ANN %<>% rename(MAPE = .estimate)
+Carlsberg_ANN_res <- cbind(RMSE_Carlsberg_ANN, MAPE_Carlsberg_ANN)
+Carlsberg_ANN_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "Carlsberg")
+```
+
+## Genmab
+
+```{r}
+RMSE_Genmab_ARIMA <- eval_Genmab_ARIMA %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_Genmab_ARIMA <- eval_Genmab_ARIMA %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_Genmab_ARIMA %<>% rename(RMSE = .estimate)
+MAPE_Genmab_ARIMA %<>% rename(MAPE = .estimate)
+Genmab_ARIMA_res <- cbind(RMSE_Genmab_ARIMA, MAPE_Genmab_ARIMA)
+Genmab_ARIMA_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "Genmab")
+```
+
+```{r}
+RMSE_Genmab_ANN <- eval_Genmab_ANN %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_Genmab_ANN <- eval_Genmab_ANN %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_Genmab_ANN %<>% rename(RMSE = .estimate)
+MAPE_Genmab_ANN %<>% rename(MAPE = .estimate)
+Genmab_ANN_res <- cbind(RMSE_Genmab_ANN, MAPE_Genmab_ANN)
+Genmab_ANN_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "Genmab")
+```
+
+## JyskeBank
+
+```{r}
+RMSE_JyskeBank_ARIMA <- eval_JyskeBank_ARIMA %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_JyskeBank_ARIMA <- eval_JyskeBank_ARIMA %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_JyskeBank_ARIMA %<>% rename(RMSE = .estimate)
+MAPE_JyskeBank_ARIMA %<>% rename(MAPE = .estimate)
+JyskeBank_ARIMA_res <- cbind(RMSE_JyskeBank_ARIMA, MAPE_JyskeBank_ARIMA)
+JyskeBank_ARIMA_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "JyskeBank")
+```
+
+```{r}
+RMSE_JyskeBank_ANN <- eval_JyskeBank_ANN %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_JyskeBank_ANN <- eval_JyskeBank_ANN %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_JyskeBank_ANN %<>% rename(RMSE = .estimate)
+MAPE_JyskeBank_ANN %<>% rename(MAPE = .estimate)
+JyskeBank_ANN_res <- cbind(RMSE_JyskeBank_ANN, MAPE_JyskeBank_ANN)
+JyskeBank_ANN_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "JyskeBank")
+```
+
+## MaerskB
+
+```{r}
+RMSE_MaerskB_ARIMA <- eval_MaerskB_ARIMA %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_MaerskB_ARIMA <- eval_MaerskB_ARIMA %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_MaerskB_ARIMA %<>% rename(RMSE = .estimate)
+MAPE_MaerskB_ARIMA %<>% rename(MAPE = .estimate)
+MaerskB_ARIMA_res <- cbind(RMSE_MaerskB_ARIMA, MAPE_MaerskB_ARIMA)
+MaerskB_ARIMA_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "MaerskB")
+```
+
+```{r}
+RMSE_MaerskB_ANN <- eval_MaerskB_ANN %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_MaerskB_ANN <- eval_MaerskB_ANN %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_MaerskB_ANN %<>% rename(RMSE = .estimate)
+MAPE_MaerskB_ANN %<>% rename(MAPE = .estimate)
+MaerskB_ANN_res <- cbind(RMSE_MaerskB_ANN, MAPE_MaerskB_ANN)
+MaerskB_ANN_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "MaerskB")
+```
+
+
+## SimCorp
+
+```{r}
+RMSE_SimCorp_ARIMA <- eval_SimCorp_ARIMA %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_SimCorp_ARIMA <- eval_SimCorp_ARIMA %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_SimCorp_ARIMA %<>% rename(RMSE = .estimate)
+MAPE_SimCorp_ARIMA %<>% rename(MAPE = .estimate)
+SimCorp_ARIMA_res <- cbind(RMSE_SimCorp_ARIMA, MAPE_SimCorp_ARIMA)
+SimCorp_ARIMA_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "SimCorp")
+```
+
+```{r}
+RMSE_SimCorp_ANN <- eval_SimCorp_ANN %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_SimCorp_ANN <- eval_SimCorp_ANN %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_SimCorp_ANN %<>% rename(RMSE = .estimate)
+MAPE_SimCorp_ANN %<>% rename(MAPE = .estimate)
+SimCorp_ANN_res <- cbind(RMSE_SimCorp_ANN, MAPE_SimCorp_ANN)
+SimCorp_ANN_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "SimCorp")
+```
+
+## Vestas
+
+```{r}
+RMSE_Vestas_ARIMA <- eval_Vestas_ARIMA %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_Vestas_ARIMA <- eval_Vestas_ARIMA %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_Vestas_ARIMA %<>% rename(RMSE = .estimate)
+MAPE_Vestas_ARIMA %<>% rename(MAPE = .estimate)
+Vestas_ARIMA_res <- cbind(RMSE_Vestas_ARIMA, MAPE_Vestas_ARIMA)
+Vestas_ARIMA_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "Vestas")
+```
+
+```{r}
+RMSE_Vestas_ANN <- eval_Vestas_ANN %>% rmse(as.numeric(Truth), as.numeric(Prediction))
+MAPE_Vestas_ANN <- eval_Vestas_ANN %>% mape(as.numeric(Truth), as.numeric(Prediction))
+RMSE_Vestas_ANN %<>% rename(RMSE = .estimate)
+MAPE_Vestas_ANN %<>% rename(MAPE = .estimate)
+Vestas_ANN_res <- cbind(RMSE_Vestas_ANN, MAPE_Vestas_ANN)
+Vestas_ANN_res %<>% select(RMSE, MAPE) %>% mutate(Stock = "Vestas")
+```
+
+## Total
+
+```{r}
+ARIMA_res <- rbind(Carlsberg_ARIMA_res, Genmab_ARIMA_res, JyskeBank_ARIMA_res, MaerskB_ARIMA_res, SimCorp_ARIMA_res, Vestas_ARIMA_res) %>% rename(RMSE_ARIMA = "RMSE") %>% rename(MAPE_ARIMA = "MAPE")
+ANN_res <- rbind(Carlsberg_ANN_res, Genmab_ANN_res, JyskeBank_ANN_res, MaerskB_ANN_res, SimCorp_ANN_res, Vestas_ANN_res) %>% rename(RMSE_ANN = "RMSE") %>% rename(MAPE_ANN = "MAPE")
+Results <- ANN_res %>% left_join(ARIMA_res, by = "Stock")
+Results %<>% mutate(RMSE_diff = ((RMSE_ANN - RMSE_ARIMA)/RMSE_ANN) * 100, MAPE_diff = MAPE_ANN - MAPE_ARIMA)
+
+Average <- data.frame("Average", mean(Results$RMSE_ARIMA), mean(Results$RMSE_ANN), mean(Results$RMSE_diff), mean(Results$MAPE_ARIMA), mean(Results$MAPE_ANN), mean(Results$MAPE_diff))
+
+names(Average) <- c("Stock", "RMSE_ARIMA", "RMSE_ANN", "RMSE_diff", "MAPE_ARIMA", "MAPE_ANN", "MAPE_diff")
+
+Results <- rbind(Average, Results)
+
+Results %>% select(Stock, RMSE_ARIMA, RMSE_ANN, RMSE_diff, MAPE_ARIMA, MAPE_ANN, MAPE_diff) %>% arrange(Stock)
+```
+
+# DM - test
+
+```{r}
+library(forecast)
+```
+
+## Carlsberg
+
+```{r}
+eval_Carlsberg_ANN %<>% mutate(diff = Truth - Prediction)
+eval_Carlsberg_ARIMA %<>% mutate(diff = Truth - Prediction)
+
+dm.test(eval_Carlsberg_ANN$diff, eval_Carlsberg_ARIMA$diff, alternative = "greater", h=1)
+```
+
+## Genmab
+
+```{r}
+eval_Genmab_ANN %<>% mutate(diff = Truth - Prediction)
+eval_Genmab_ARIMA %<>% mutate(diff = Truth - Prediction)
+
+dm.test(eval_Genmab_ANN$diff, eval_Genmab_ARIMA$diff, alternative = "greater", h=1)
+```
+
+## JyskeBank
+
+```{r}
+eval_JyskeBank_ANN %<>% mutate(diff = Truth - Prediction)
+eval_JyskeBank_ARIMA %<>% mutate(diff = Truth - Prediction)
+
+dm.test(eval_JyskeBank_ANN$diff, eval_JyskeBank_ARIMA$diff, alternative = "greater", h=1)
+```
+
+## MaerskB
+
+```{r}
+eval_MaerskB_ANN %<>% mutate(diff = Truth - Prediction)
+eval_MaerskB_ARIMA %<>% mutate(diff = Truth - Prediction)
+
+dm.test(eval_MaerskB_ANN$diff, eval_MaerskB_ARIMA$diff, alternative = "less", h=1)
+```
+
+## SimCorp
+
+```{r}
+eval_SimCorp_ANN %<>% mutate(diff = Truth - Prediction)
+eval_SimCorp_ARIMA %<>% mutate(diff = Truth - Prediction)
+
+dm.test(eval_SimCorp_ANN$diff, eval_SimCorp_ARIMA$diff, alternative = "greater", h=1)
+```
+
+## Vestas
+
+```{r}
+eval_Vestas_ANN %<>% mutate(diff = Truth - Prediction)
+eval_Vestas_ARIMA %<>% mutate(diff = Truth - Prediction)
+
+dm.test(eval_Vestas_ANN$diff, eval_Vestas_ARIMA$diff, alternative = "greater", h=1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

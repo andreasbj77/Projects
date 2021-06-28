@@ -1,0 +1,467 @@
+---
+title: "Datacreation"
+author: "Andreas Borup Joergensen, Mette Koch Moeller, Robert Hoestrup"
+date: "04-06-2021"
+output:
+  html_notebook:
+    code_folding: show
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE,
+                     message=FALSE,
+                     comment=FALSE, 
+                     fig.align="center"
+                     )
+```
+
+Downloading the required packages
+```{r}
+library(tidyverse) #Collection of all the good stuff like dplyr, ggplot2 ect.
+library(magrittr) #For advanced piping
+library(tidyquant) # For getting stock data
+library(ggpubr) #package that helps mixing multiple plots on the same page
+library(rtweet) #For saving the data set as csv file
+```
+
+# Preprocessing the stocks
+## Downloading the data
+The data chosen for this study is the Danish C25 stock index. The daily stock price is downloaded directly from yahoo finance using the *tidyquant* package. Since we want to forecast the year of 2019, data selection and model creation is based on 2018. Therefore we need to download the stocks which were a part of the C25 index in 2018. What stocks to include is found in the following [link (Slide 2)](https://www.pwc.dk/da/publikationer/2019/c25-by-numbers-2019.pdf). All of the stock prices is in DKK. The time period examined is 2010-2019. Since we need enough data to train the model, we exclude stocks which is not listed on the Copenhagen stock exchange for the entire time period. 
+
+```{r}
+maera = c("MAERSK-A.CO") 
+MaerskA <- tq_get(maera,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+maerb = c("MAERSK-B.CO") 
+MaerskB <- tq_get(maerb,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+amb = c("AMBU-B.CO") 
+Ambu <- tq_get(amb,   
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+car = c("CARL-B.CO") 
+Carlsberg <- tq_get(car,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+col = c("COLO-B.CO") 
+Coloplast <- tq_get(col,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+dan = c("DANSKE.CO") 
+DanskeBank <- tq_get(dan,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+dsv = c("DSV.CO") 
+DSV <- tq_get(dsv,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+fls = c("FLS.CO") 
+FLSmidth <- tq_get(fls,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+gmab = c("GMAB.CO") 
+Genmab <- tq_get(gmab,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+gn = c("GN.CO")  
+GN <- tq_get(gn,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+
+lun = c("LUN.CO")  
+Lundbeck <- tq_get(lun,
+               from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+jys = c("JYSK.CO")  
+JyskeBank <- tq_get(jys,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+
+novo = c("NOVO-B.CO")  
+NovoNordisk <- tq_get(novo,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+novoz = c("NZYM-B.CO")  
+Novozymes  <- tq_get(novoz,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+roy = c("RBREW.CO")  
+RoyalUnibrew <- tq_get(roy,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+
+sim = c("SIM.CO")  
+SimCorp <- tq_get(sim,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+syd = c("SYDB.CO")  
+SydBank <- tq_get(syd,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+tryg = c("TRYG.CO") 
+Tryg  <- tq_get(tryg,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+ves = c("VWS.CO") 
+Vestas <- tq_get(ves,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+
+wil = c("DEMANT.CO") 
+WilliamDemant <- tq_get(wil,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+```
+
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(amb, bav, car, col, vol, dan, dsv, fls, gmab, gn, jys, lun, maera, maerb, nkt, nor, novo, novoz, roy, sim, syd, tryg, ves, wil)
+```
+
+When using the *tidyquant* package, it downloads eight different variables, including the date, opening and closing price, and volume. For this thesis, it is chosen to forecast the closing price. Therefore the closing price and date are selected for each data set. To make it easier to manage when joining the data sets, the closing price is renamed the stock's name. Furthermore, the prices are rounded to 2 decimals. 
+
+```{r}
+MaerskA %<>%
+  mutate(MaerskA = close %>% round(2))  %>%
+  select(date, MaerskA) 
+MaerskB %<>%
+  mutate(MaerskB = close %>% round(2))  %>%
+  select(date, MaerskB) 
+Ambu %<>%
+  mutate(Ambu = close %>% round(2))  %>%
+  select(date, Ambu) 
+Carlsberg %<>%
+  mutate(Carlsberg = close %>% round(2))  %>%
+  select(date,Carlsberg )  
+Coloplast  %<>%
+  mutate(Coloplast = close %>% round(2))  %>%
+  select(date, Coloplast) 
+DanskeBank %<>%
+  mutate(DanskeBank = close %>% round(2))  %>%
+  select(date, DanskeBank) 
+DSV %<>%
+  mutate(DSV = close %>% round(2))  %>%
+  select(date, DSV) 
+FLSmidth %<>%
+  mutate(FLSmidth = close %>% round(2))  %>%
+  select(date, FLSmidth) 
+Genmab %<>%
+  mutate(Genmab = close %>% round(2))  %>%
+  select(date, Genmab) 
+GN %<>%
+  mutate(GN = close %>% round(2))  %>%
+  select(date, GN) 
+JyskeBank %<>%
+  mutate(JyskeBank = close %>% round(2))  %>%
+  select(date, JyskeBank) 
+Lundbeck %<>%
+  mutate(Lundbeck = close %>% round(2))  %>%
+  select(date, Lundbeck) 
+NovoNordisk %<>%
+  mutate(NovoNordisk = close %>% round(2))  %>%
+  select(date, NovoNordisk) 
+Novozymes %<>%
+  mutate(Novozymes  = close %>% round(2))  %>%
+  select(date, Novozymes) 
+RoyalUnibrew %<>%
+  mutate(RoyalUnibrew  = close %>% round(2))  %>%
+  select(date, RoyalUnibrew) 
+SimCorp %<>%
+  mutate(SimCorp  = close %>% round(2))  %>%
+  select(date, SimCorp) 
+SydBank %<>%
+  mutate(SydBank  = close %>% round(2))  %>%
+  select(date, SydBank) 
+Tryg %<>%
+  mutate(Tryg  = close %>% round(2))  %>%
+  select(date, Tryg ) 
+Vestas %<>%
+  mutate(Vestas = close %>% round(2))  %>%
+  select(date, Vestas) 
+WilliamDemant %<>%
+  mutate(WilliamDemant = close %>% round(2))  %>%
+  select(date, WilliamDemant)
+```
+## Combing the data sets
+The data set is left joined by the dates and combined into one data set named *data*. 
+```{r}
+data <- left_join(MaerskA, MaerskB, by = "date")
+data <- left_join(data, Ambu, by = "date")
+data <- left_join(data, Carlsberg, by = "date")
+data <- left_join(data, Coloplast, by = "date")
+data <- left_join(data, DanskeBank, by = "date")
+data <- left_join(data, DSV, by = "date")
+data <- left_join(data, FLSmidth, by = "date")
+data <- left_join(data, Genmab, by = "date")
+data <- left_join(data, GN, by = "date")
+data <- left_join(data, JyskeBank, by = "date")
+data <- left_join(data, Lundbeck, by = "date")
+data <- left_join(data, NovoNordisk, by = "date")
+data <- left_join(data, Novozymes, by = "date")
+data <- left_join(data, RoyalUnibrew, by = "date")
+data <- left_join(data, SimCorp, by = "date")
+data <- left_join(data, SydBank, by = "date")
+data <- left_join(data, Tryg, by = "date")
+data <- left_join(data, Vestas, by = "date")
+data <- left_join(data, WilliamDemant, by = "date")
+```
+Renaming date to start with a capital letter
+```{r}
+data %<>% rename("Date" = "date")
+```
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(Ambu, MaerskA, MaerskB, Baverian, Carlsberg, Coloplast, DanskeBank, DSV, FLSmidth, Genmab, GN, JyskeBank, Lundbeck, NKT, Nordea, NovoNordisk, Novozymes, RoyalUnibrew, SimCorp, SydBank, Tryg, Vestas, WilliamDemant)
+```
+
+# Adding other feautures
+## C20 index
+Downloading C2o from github which is collected on investing.com.
+```{r}
+C20index <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Raw_data/OMX%20Copenhagen%2020%20Historical%20Data.csv")
+```
+
+```{r}
+C20index %<>% 
+  rename(C20index = Price) %>%
+  mutate(Date = Date %>% parse_date_time(orders = "mdy"),
+         Date = Date %>% as_date(),
+         C20index = C20index %>% round(2)) %>%
+  select(Date, C20index) %>%  
+  arrange(Date)
+```
+
+```{r}
+data <- left_join(data, C20index,  by = "Date")
+```
+
+```{r}
+rm(C20index)
+```
+
+
+
+## SP500
+Downloading the SP500 from yahoo finance. 
+```{r}
+sp500 = c("^GSPC") 
+SP500 <- tq_get(sp500,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+```
+
+```{r}
+SP500 %<>%
+  mutate(SP500 = close %>% round(2))  %>%
+  select(date, SP500 ) %>% rename("Date" ="date")
+```
+
+```{r}
+data %<>% left_join(SP500,  by = "Date")
+```
+
+```{r}
+rm(SP500, sp500)
+```
+
+
+## Danish state bond
+### Two year Danish state bond
+Downloading the two year Danish state from github which is collected on investing.com.
+```{r}
+TwoYearBond <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Raw_data/Denmark%202-Year%20Bond%20Yield%20Historical%20Data.csv") 
+```
+
+```{r}
+TwoYearBond %<>% 
+  rename(TwoYearBond = Price) %>%
+  mutate(Date = Date %>% parse_date_time(orders = "mdy"),
+         Date = Date %>% as_date(),
+         TwoYearBond = TwoYearBond %>% round(2)) %>%
+  select(Date, TwoYearBond) %>%
+  arrange(Date)
+```
+
+```{r}
+data <- left_join(data, TwoYearBond,  by = "Date")
+```
+
+```{r}
+rm(TwoYearBond)
+```
+
+### Ten year danish state bond
+Downloading the ten year Danish state from github which is collected on investing.com
+```{r}
+TenYearBond<- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Raw_data/Denmark-10-Year-Bond-Yield-Historical-Data.csv") 
+```
+
+```{r}
+TenYearBond %<>% 
+  rename(TenYearBond = Price) %>%
+  mutate(Date = Date %>% parse_date_time(orders = "mdy"),
+         Date = Date %>% as_date(),
+         TenYearBond = TenYearBond %>% round(2)) %>%
+  select(Date, TenYearBond) %>% 
+  arrange(Date)
+```
+
+```{r}
+data <- left_join(data, TenYearBond,  by = "Date")
+```
+
+```{r}
+rm(TenYearBond)
+```
+
+
+## Oil price and gold
+Other features besides the stocks are downloaded. 
+
+### Oil price
+Downloading the oil price 
+```{r}
+oil = c("CL=F") 
+OilPrice <- tq_get(oil,
+                from = "2010-01-01",
+               to = "2019-12-30",
+               get = "stock.prices")
+```   
+The name for the oil price is changed from Value to OilPrice to make it easier to code. 
+```{r}
+OilPrice %<>%
+  mutate(OilPrice = close %>% round(2))  %>%
+  rename("Date" = "date") %>%
+  select(Date, OilPrice) 
+```
+
+The oil price is now left joined to the data set.
+```{r}
+data <- left_join(data, OilPrice,  by =  "Date")
+```
+
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(OilPrice, oil)
+```
+
+### Gold 
+Downloading the gold price from github which is collected on investing.com
+```{r}
+GoldFutures <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Raw_data/Gold%20Futures%20Historical%20Data.csv")
+```
+
+```{r}
+GoldFutures %<>% 
+  mutate(Date = Date %>% parse_date_time(orders = "mdy"),
+         Date = Date %>% as_date())%>%
+  rename("GoldFutures" = "Price") %>%
+  select(Date, GoldFutures) %>%
+  arrange(Date)
+```
+
+```{r}
+data <- left_join(data, GoldFutures,  by = "Date")
+```
+
+```{r}
+rm(GoldFutures)
+```
+
+## Exchange rate
+### USD, GBP, SEK, NOK, and CNY
+The exchange rate is downloaded. The exchange rate for USD from yahoo finance has some missing data (some weeks in September 2019). Therefore the exchange rate is instead downloaded github which is collected on The National Bank of Denmark's StatBank. 
+
+```{r}
+Currency <- read_tsv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Raw_data/Currency.txt") %>% select(-X7)
+```
+
+```{r}
+Currency %<>% mutate(USD = USD/100, GBP = GBP/100, NOK = NOK/100, SEK = SEK/100, CNY = CNY/100)  %>%
+  mutate(Date = Date %>% parse_date_time(orders = "dmy")) %>%
+  mutate(Date = Date %>% as_date())
+```
+
+```{r}
+Currency %<>%
+  mutate(USD = USD %>% round(2), GBP = GBP %>% round(2), SEK = SEK %>% round(2), NOK = NOK %>% round(2), CNY = CNY %>% round(2))
+```
+ The exchange rate is left joined to the data set.
+```{r}
+data <- left_join(data, Currency,  by = "Date")
+```
+
+Cleaning the environment from unnecessary data sets.
+```{r}
+rm(Currency)
+```
+
+
+# Summary
+Taking a look at the final data set
+```{r}
+data %>% glimpse()
+```
+# Saving the data set
+The data set is now done and ready for EDA. It is saved as a cvs-file and uploaded on [Github](https://github.com/andreasbj77/Master-thesis/tree/main/Data/Final_data)
+```{r}
+write_as_csv(data,"DataCreation.csv")
+```
+
+

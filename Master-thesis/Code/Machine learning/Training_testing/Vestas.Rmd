@@ -1,0 +1,763 @@
+---
+title: "Hyper - Vestas"
+author: "Andreas Borup Joergensen, Mette Koch Moeller, Robert Hoestrup"
+Date: "04-03-2021"
+output:
+  html_notebook:
+    code_folding: show
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE,
+                     message=FALSE,
+                     comment=FALSE, 
+                     fig.align="center"
+                     )
+```
+
+Downloading the packages
+```{r}
+library(tidyverse) #Collection of all the good stuff like dplyr, ggplot2 ect.
+library(magrittr) #For advanced piping
+library(kerastuneR) #For hyper tuning ANN models
+library(keras) #For ANN models
+library(tidymodels)
+library(ggpubr) #package that helps mixing multiple plots on the same page
+```
+
+Downloading the data directly from github
+```{r}
+data <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Data/Final_data/DataCreationVestas.csv")
+```
+
+The data contains the date, the response variable and the features we have decided to use.
+```{r}
+data %>% glimpse()
+```
+
+# Pre-processing
+_____
+The variable is scaled and made numeric. This is done because its generally easier for RNNs to learn from scaled data. The scaling attribute attr is saved in order to be able to unscale the data later.
+
+```{r}
+data$Vestas %<>% scale(center = FALSE, scale = TRUE)
+data$Genmab %<>% scale(center = FALSE, scale = TRUE)
+data$NovoNordisk %<>% scale(center = FALSE, scale = TRUE)
+data$USD %<>% scale(center = FALSE, scale = TRUE)
+data$NOK %<>% scale(center = FALSE, scale = TRUE)
+data$C20index %<>% scale(center = FALSE, scale = TRUE)
+data$SP500 %<>% scale(center = FALSE, scale = TRUE)
+
+att_Vestas <- attr(data$Vestas, 'scaled:scale')
+
+data$Vestas %<>% as.numeric()
+data$Genmab %<>% as.numeric()
+data$NovoNordisk %<>% as.numeric()
+data$USD %<>% as.numeric()
+data$NOK %<>% as.numeric()
+data$C20index %<>% as.numeric()
+data$SP500 %<>% as.numeric()
+```
+
+We check the data to make sure it is all scaled properly
+```{r}
+data %>% glimpse()
+```
+
+The variables needed to forecast Vestas is selected from the complete data set
+```{r}
+data_Vestas <- data
+```
+
+## Out-of-Sample-Testing
+
+The data is split into a training, testing, and forecasting set. The periods chosen are the 2010-2017 for training, 2018 for testing and 2019 for forecasting.
+
+```{r}
+training <- data_Vestas %>% filter(Date <= "2017-12-29")
+testing <- data_Vestas %>% filter(Date > "2017-12-29" & Date <= "2018-12-28")
+```
+
+
+The data sets are divided into the response and explanatory variables. Here a lead of Vestas acts as the response variable.
+
+```{r}
+#Train data
+x_train <- training %>% 
+  select(-Date) %>% 
+  as.matrix()
+
+y_train <- training %>%
+  select(-Date) %>%
+  mutate(Vestas = Vestas %>% lead(1)) %>%
+  mutate(Vestas = ifelse(is.na(Vestas), lag(Vestas, 1), Vestas)) %>%
+  select(Vestas) %>% 
+  as.matrix()
+
+#Test data
+x_test <- testing %>% 
+  select(-Date) %>%
+  as.matrix()
+
+y_test <- testing %>%
+  select(-Date) %>%
+  mutate(Vestas = Vestas %>% lead(1)) %>%
+  mutate(Vestas = ifelse(is.na(Vestas), lag(Vestas, 1), Vestas)) %>%
+  select(Vestas) %>% 
+  as.matrix()
+```
+
+## Creating time series generators
+
+```{r}
+n_input = 5  # amount of timesteps in the model
+n_features = ncol(data_Vestas) - 1 # amount of explanatory variables
+b_size = 64 # amount of data points going through at the same time
+step_train = (nrow(training)/b_size) %>% round(0) # Steps is equals to the amount that sends all data through the model once per epoch
+step_test = (nrow(testing)/b_size) %>% round(0) # Steps is equals to the amount that sends all data through the model once per epoch
+
+
+# Generator for training
+training_generator = timeseries_generator(x_train,
+                                 y_train,
+                                 length = n_input,
+                                 batch_size = b_size)
+
+# Generator for testing
+test_generator = timeseries_generator(x_test,
+                                 y_test,
+                                 length = n_input,
+                                 batch_size = b_size)
+```
+
+# Creating models
+
+##FNN
+
+```{r}
+build_model <- function(hp) {
+  
+  model <- keras_model_sequential()
+  model %>% layer_dense(units = hp$Int('units',
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        input_shape = ncol(x_train),
+                        activation = "relu") %>%
+            layer_dropout(rate = hp$Choice("dropout_rate", values = c(0, 0.1, 0.2, 0.3)))
+      for (i in 1:(hp$Int('num_layers', 1L, 5L)) ) {
+     model %>% layer_dense(units = hp$Int(paste0("units",i),
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        activation= "relu") %>% 
+               layer_dropout(rate = hp$Choice(paste0("dropout_rate",i), values = c(0, 0.1, 0.2, 0.3)))
+      } 
+     model %>% layer_dense(units = 1) %>%
+    compile(
+      optimizer = tf$keras$optimizers$Adam(
+        hp$Choice("learning_rate",
+                  values = c(1e-2, 1e-3, 1e-4))),
+      loss = "mse",
+      metric = "mape")
+  return(model)
+}
+```
+
+```{r}
+tuner <- Hyperband(
+  build_model,
+  objective = "val_mape",
+  max_epochs = 20,
+  hyperband_iterations = 5,
+  project_name = "Vestas_hyper_FNN")
+```
+
+```{r}
+tuner %>% search_summary()
+```
+
+```{r}
+system.time({
+tuner %>% fit_tuner(x = x_train, #training the model
+                    y = y_train,
+                    epochs = 5,
+                    validation_split = 0.10,
+                    shuffle = TRUE,
+                    initial_epoch = 0,
+                    use_multiprocessing = TRUE,
+                    workers = 7,
+                    verbose = 0)
+})
+```
+
+```{r}
+model_ANN <- tuner %>% get_best_models(1)
+model_ANN <- model_ANN[[1]]
+```
+
+
+```{r}
+model_ANN %>% summary
+```
+
+```{r}
+rm(tuner, build_model)
+```
+
+
+## RNN
+
+```{r}
+build_model <- function(hp) {
+  
+model <- keras_model_sequential()
+  
+  model %>% layer_simple_rnn(units = hp$Int('units',
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        input_shape = c(n_input, n_features),
+                        activation = hp$Choice("RNN_activation", values = c("relu", "tanh")), return_sequences = FALSE)
+  for (i in 1:(hp$Int('num_layers', 1L, 5L)) ) {
+     model %>% layer_dense(units = hp$Int(paste0("units",i),
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        activation= "relu") %>% 
+               layer_dropout(rate = hp$Choice(paste0("dropout_rate",i), values = c(0, 0.1, 0.2, 0.3)))
+      } 
+     model %>% layer_dense(units = 1) %>%
+    compile(
+      optimizer = tf$keras$optimizers$Adam(
+        hp$Choice("learning_rate",
+                  values = c(1e-2, 1e-3, 1e-4))),
+      loss = "mse",
+      metric = "mape")
+  return(model)
+}
+```
+
+```{r}
+tuner <- Hyperband(
+  build_model,
+  objective = "val_mape",
+  max_epochs = 10,
+  hyperband_iterations = 5,
+  project_name = "Vestas_hyper_RNN")
+```
+
+```{r}
+tuner %>% search_summary()
+```
+
+```{r}
+system.time({
+tuner %>% fit_tuner(training_generator,
+              epochs = 10,
+              steps_per_epoch = step_train,
+              validation_data = test_generator,
+              validation_steps = step_test,
+              initial_epoch = 0,
+              verbose = 0)
+})
+```
+
+```{r}
+model_RNN <- tuner %>% get_best_models(1)
+model_RNN <- model_RNN[[1]]
+```
+
+```{r}
+model_RNN %>% summary
+```
+
+```{r}
+rm(tuner, build_model)
+```
+
+## LSTM
+
+```{r}
+build_model <- function(hp) {
+  
+model <- keras_model_sequential()
+  
+  model %>% layer_lstm(units = hp$Int("LSTM_units",
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                       recurrent_activation = "sigmoid",
+                       return_sequences = FALSE,
+                       input_shape = c(n_input, n_features))
+  
+  for (i in 1:(hp$Int('num_layers', 1L, 5L)) ) {
+     model %>% layer_dense(units = hp$Int(paste0("units",i),
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        activation= "relu") %>% 
+               layer_dropout(rate = hp$Choice(paste0("dropout_rate",i), values = c(0, 0.1, 0.2, 0.3)))
+  } 
+  
+     model %>% layer_dense(units = 1) %>%
+    compile(
+      optimizer = tf$keras$optimizers$Adam(
+        hp$Choice("learning_rate",
+                  values = c(1e-2, 1e-3, 1e-4))),
+      loss = "mse",
+      metric = "mape")
+  return(model)
+}
+```
+
+```{r}
+tuner <- Hyperband(
+  build_model,
+  objective = "val_mape",
+  max_epochs = 10,
+  hyperband_iterations = 5,
+  project_name = "Vestas_hyper_LSTM")
+```
+
+```{r}
+tuner %>% search_summary()
+```
+
+```{r}
+system.time({
+tuner %>% fit_tuner(training_generator,
+              epochs = 10,
+              steps_per_epoch = step_train,
+              validation_data = test_generator,
+              validation_steps = step_test,
+              initial_epoch = 0,
+              verbose = 0)
+})
+```
+
+```{r}
+model_LSTM <- tuner %>% get_best_models(1)
+model_LSTM <- model_LSTM[[1]]
+```
+
+```{r}
+model_LSTM %>% summary
+```
+
+```{r}
+rm(tuner, build_model)
+```
+
+## Bi-directional LSTM
+
+```{r}
+build_model <- function(hp) {
+  
+model <- keras_model_sequential()
+  
+  model %>% bidirectional(
+            layer_lstm(units = hp$Int("LSTM_units",
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                      recurrent_activation = "sigmoid", 
+                      return_sequences = FALSE),
+                      input_shape = c(n_input, n_features))
+  for (i in 1:(hp$Int('num_layers', 1L, 5L)) ) {
+     model %>% layer_dense(units = hp$Int(paste0("units",i),
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        activation= "relu") %>% 
+               layer_dropout(rate = hp$Choice(paste0("dropout_rate",i), values = c(0, 0.1, 0.2, 0.3)))
+      } 
+     model %>% layer_dense(units = 1) %>%
+    compile(
+      optimizer = tf$keras$optimizers$Adam(
+        hp$Choice("learning_rate",
+                  values = c(1e-2, 1e-3, 1e-4))),
+      loss = "mse",
+      metric = "mape")
+  return(model)
+}
+```
+
+```{r}
+tuner <- Hyperband(
+  build_model,
+  objective = "val_mape",
+  max_epochs = 10,
+  hyperband_iterations = 5,
+  project_name = "Vestas_hyper_biLSTM")
+```
+
+```{r}
+tuner %>% search_summary()
+```
+
+```{r}
+system.time({
+tuner %>% fit_tuner(training_generator,
+              epochs = 10,
+              steps_per_epoch = step_train,
+              validation_data = test_generator,
+              validation_steps = step_test,
+              initial_epoch = 0,
+              verbose = 0)
+})
+```
+
+```{r}
+model_biLSTM <- tuner %>% get_best_models(1)
+model_biLSTM <- model_biLSTM[[1]]
+```
+
+```{r}
+model_biLSTM %>% evaluate_generator(test_generator, steps = step_test)
+```
+
+```{r}
+model_biLSTM %>% summary
+```
+
+
+```{r}
+rm(tuner, build_model)
+```
+
+## GRU
+
+```{r}
+build_model <- function(hp) {
+  
+model <- keras_model_sequential()
+  
+  model %>% layer_gru(units = hp$Int("GRU_units",
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                      reset_after = TRUE,
+                      recurrent_activation = "sigmoid", 
+                      return_sequences = FALSE,
+                      input_shape = c(n_input, n_features))
+  
+  for (i in 1:(hp$Int('num_layers', 1L, 5L)) ) {
+     model %>% layer_dense(units = hp$Int(paste0("units",i),
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        activation= "relu") %>% 
+               layer_dropout(rate = hp$Choice(paste0("dropout_rate",i), values = c(0, 0.1, 0.2, 0.3)))
+      } 
+     model %>% layer_dense(units = 1) %>%
+    compile(
+      optimizer = tf$keras$optimizers$Adam(
+        hp$Choice("learning_rate",
+                  values = c(1e-2, 1e-3, 1e-4))),
+      loss = "mse",
+      metric = "mape")
+  return(model)
+}
+```
+
+```{r}
+tuner <- Hyperband(
+  build_model,
+  objective = "val_mape",
+  max_epochs = 10,
+  hyperband_iterations = 5,
+  project_name = "Vestas_hyper_GRU")
+```
+
+```{r}
+tuner %>% search_summary()
+```
+
+```{r}
+system.time({
+tuner %>% fit_tuner(training_generator,
+              epochs = 10,
+              steps_per_epoch = step_train,
+              validation_data = test_generator,
+              validation_steps = step_test,
+              initial_epoch = 0,
+              verbose = 0)
+})
+```
+
+```{r}
+model_GRU <- tuner %>% get_best_models(1)
+model_GRU <- model_GRU[[1]]
+```
+
+```{r}
+model_GRU %>% summary
+```
+
+```{r}
+rm(tuner, build_model)
+```
+
+
+## Bi-directional GRU
+
+```{r}
+build_model <- function(hp) {
+  
+model <- keras_model_sequential()
+  
+  model %>% bidirectional(
+            layer_gru(units = hp$Int("GRU_units",
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                      reset_after = TRUE,
+                      recurrent_activation = "sigmoid", 
+                      return_sequences = FALSE),
+                      input_shape = c(n_input, n_features))
+  for (i in 1:(hp$Int('num_layers', 1L, 5L)) ) {
+     model %>% layer_dense(units = hp$Int(paste0("units",i),
+                                       min_value =32,
+                                       max_value = 1024,
+                                       step = 32),
+                        activation= "relu") %>% 
+               layer_dropout(rate = hp$Choice(paste0("dropout_rate",i), values = c(0, 0.1, 0.2, 0.3)))
+      } 
+     model %>% layer_dense(units = 1) %>%
+    compile(
+      optimizer = tf$keras$optimizers$Adam(
+        hp$Choice("learning_rate",
+                  values = c(1e-2, 1e-3, 1e-4))),
+      loss = "mse",
+      metric = "mape")
+  return(model)
+}
+```
+
+```{r}
+tuner <- Hyperband(
+  build_model,
+  objective = "val_mape",
+  max_epochs = 10,
+  hyperband_iterations = 5,
+  project_name = "Vestas_hyper_biGRU")
+```
+
+```{r}
+tuner %>% search_summary()
+```
+
+```{r}
+system.time({
+tuner %>% fit_tuner(training_generator,
+              epochs = 10,
+              steps_per_epoch = step_train,
+              validation_data = test_generator,
+              validation_steps = step_test,
+              initial_epoch = 0,
+              verbose = 0)
+})
+```
+
+```{r}
+model_biGRU <- tuner %>% get_best_models(1)
+model_biGRU <- model_biGRU[[1]]
+```
+
+```{r include=FALSE}
+model_biGRU %>% evaluate_generator(test_generator, steps = step_test)
+```
+
+```{r}
+model_biGRU %>% summary
+```
+
+# Results
+
+```{r warning=FALSE}
+ANN_prediction <- model_ANN %>% predict(x_test)
+RNN_prediction <- predict_generator(model_RNN, test_generator, steps = step_test)
+LSTM_prediction <-predict_generator(model_LSTM, test_generator, steps = step_test)
+biLSTM_prediction <-predict_generator(model_biLSTM, test_generator, steps = step_test)
+GRU_prediction <-predict_generator(model_GRU, test_generator, steps = step_test)
+biGRU_prediction <-predict_generator(model_biGRU, test_generator, steps = step_test)
+```
+
+```{r}
+ANN_prediction_unscale <- ANN_prediction * att_Vestas
+RNN_prediction_unscale <- RNN_prediction * att_Vestas
+LSTM_prediction_unscale <- LSTM_prediction * att_Vestas
+biLSTM_prediction_unscale <- biLSTM_prediction * att_Vestas
+GRU_prediction_unscale <- GRU_prediction * att_Vestas
+biGRU_prediction_unscale <- biGRU_prediction * att_Vestas
+
+y_test_unscale <- y_test * att_Vestas
+```
+
+
+```{r}
+start <- n_input + 1
+
+eval_ANN <- tibble(
+  Date = testing %>% pull(Date),
+  truth = y_test_unscale,
+  prediction = ANN_prediction_unscale
+)
+
+eval_RNN <- tibble(
+  Date = testing[start:nrow(testing),] %>% pull(Date),
+  truth = y_test_unscale[start:nrow(testing),],
+  prediction = RNN_prediction_unscale
+)
+
+eval_LSTM <- tibble(
+  Date = testing[start:nrow(testing),] %>% pull(Date),
+  truth = y_test_unscale[start:nrow(testing),],
+  prediction = LSTM_prediction_unscale
+)
+
+eval_biLSTM <- tibble(
+  Date = testing[start:nrow(testing),] %>% pull(Date),
+  truth = y_test_unscale[start:nrow(testing),],
+  prediction = biLSTM_prediction_unscale
+)
+
+eval_GRU <- tibble(
+  Date = testing[start:nrow(testing),] %>% pull(Date),
+  truth = y_test_unscale[start:nrow(testing),],
+  prediction = GRU_prediction_unscale
+)
+
+eval_biGRU <- tibble(
+  Date = testing[start:nrow(testing),] %>% pull(Date),
+  truth = y_test_unscale[start:nrow(testing),],
+  prediction = biGRU_prediction_unscale
+)
+```
+
+```{r}
+RMSE_ANN <- eval_ANN %>% rmse(as.numeric(truth), as.numeric(prediction))
+MAPE_ANN <- eval_ANN %>% mape(as.numeric(truth), as.numeric(prediction))
+RMSE_ANN %<>% rename(RMSE = .estimate)
+MAPE_ANN %<>% rename(MAPE = .estimate)
+ANN <- cbind(RMSE_ANN, MAPE_ANN)
+ANN %<>% select(RMSE, MAPE) %>% mutate(Model = "ANN")
+
+RMSE_RNN <- eval_RNN %>% rmse(as.numeric(truth), as.numeric(prediction))
+MAPE_RNN <- eval_RNN %>% mape(as.numeric(truth), as.numeric(prediction))
+RMSE_RNN %<>% rename(RMSE = .estimate)
+MAPE_RNN %<>% rename(MAPE = .estimate)
+RNN <- cbind(RMSE_RNN, MAPE_RNN)
+RNN %<>% select(RMSE, MAPE) %>% mutate(Model = "RNN")
+
+RMSE_LSTM <- eval_LSTM %>% rmse(as.numeric(truth), as.numeric(prediction))
+MAPE_LSTM <- eval_LSTM %>% mape(as.numeric(truth), as.numeric(prediction))
+RMSE_LSTM %<>% rename(RMSE = .estimate)
+MAPE_LSTM %<>% rename(MAPE = .estimate)
+LSTM <- cbind(RMSE_LSTM, MAPE_LSTM)
+LSTM %<>% select(RMSE, MAPE) %>% mutate(Model = "LSTM")
+
+RMSE_biLSTM <- eval_biLSTM %>% rmse(as.numeric(truth), as.numeric(prediction))
+MAPE_biLSTM <- eval_biLSTM %>% mape(as.numeric(truth), as.numeric(prediction))
+RMSE_biLSTM %<>% rename(RMSE = .estimate)
+MAPE_biLSTM %<>% rename(MAPE = .estimate)
+biLSTM <- cbind(RMSE_biLSTM, MAPE_biLSTM)
+biLSTM %<>% select(RMSE, MAPE) %>% mutate(Model = "biLSTM")
+
+RMSE_gru <- eval_GRU %>% rmse(as.numeric(truth), as.numeric(prediction))
+MAPE_gru <- eval_GRU %>% mape(as.numeric(truth), as.numeric(prediction))
+RMSE_gru %<>% rename(RMSE = .estimate)
+MAPE_gru %<>% rename(MAPE = .estimate)
+GRU <- cbind(RMSE_gru, MAPE_gru)
+GRU %<>% select(RMSE, MAPE) %>% mutate(Model = "GRU")
+
+RMSE_bigru <- eval_biGRU %>% rmse(as.numeric(truth), as.numeric(prediction))
+MAPE_bigru <- eval_biGRU %>% mape(as.numeric(truth), as.numeric(prediction))
+RMSE_bigru %<>% rename(RMSE = .estimate)
+MAPE_bigru %<>% rename(MAPE = .estimate)
+biGRU <- cbind(RMSE_bigru, MAPE_bigru)
+biGRU %<>% select(RMSE, MAPE) %>% mutate(Model = "biGRU")
+```
+
+The resulting MAPE and RMSE for each of the models are combined in a single data frame
+```{r}
+Results <- rbind(ANN, RNN, LSTM, biLSTM, GRU, biGRU)
+```
+
+## Testing results
+
+We arrange the results at ascending RMSE to see which model performs best
+```{r}
+Results %>% select(Model, RMSE, MAPE) %>% arrange(RMSE)
+```
+
+We also plot all the models' forecast to see how they perform over time
+```{r fig.height=20, fig.width=15}
+plot_ANN <- eval_ANN %>% 
+  pivot_longer(-Date) %>%
+  ggplot(aes(x = Date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("FNN")
+
+plot_RNN <- eval_RNN %>% 
+  pivot_longer(-Date) %>%
+  ggplot(aes(x = Date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("RNN")
+
+plot_LSTM <- eval_LSTM %>% 
+  pivot_longer(-Date) %>%
+  ggplot(aes(x = Date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("LSTM")
+
+plot_biLSTM <- eval_biLSTM %>% 
+  pivot_longer(-Date) %>%
+  ggplot(aes(x = Date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("biLSTM")
+
+plot_GRU <- eval_GRU %>% 
+  pivot_longer(-Date) %>%
+  ggplot(aes(x = Date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("GRU")
+
+plot_biGRU <- eval_biGRU %>% 
+  pivot_longer(-Date) %>%
+  ggplot(aes(x = Date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("biGRU")
+
+plot <- ggarrange(plot_ANN, plot_RNN, plot_LSTM, plot_biLSTM, plot_GRU, plot_biGRU, ncol = 1)
+annotate_figure(plot, top = text_grob("Accuracy of forecast", size = 15))
+```
+
+```{r}
+save_model_hdf5(model_ANN, "model_ANN_Vestas")
+save_model_hdf5(model_RNN, "model_RNN_Vestas")
+save_model_hdf5(model_LSTM, "model_LSTM_Vestas")
+save_model_hdf5(model_biLSTM, "model_biLSTM_Vestas")
+save_model_hdf5(model_GRU, "model_GRU_Vestas")
+save_model_hdf5(model_biGRU, "model_biGRU_Vestas")
+Results %>% select(Model, RMSE, MAPE) %>% write.csv("Results_Vestas")
+```
+
+

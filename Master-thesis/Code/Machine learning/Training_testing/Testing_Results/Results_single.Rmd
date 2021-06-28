@@ -1,0 +1,89 @@
+---
+title: "Results of machine learning without features"
+author: "Andreas Borup Joergensen, Mette Koch Moeller, Robert Hoestrup"
+Date: 04-03-2021
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+  html_notebook:
+    code_folding: show
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+---
+
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE,
+                     message=FALSE,
+                     comment=FALSE, 
+                     fig.align="center"
+                     )
+```
+
+Downloading the packages
+```{r}
+library(magrittr) #For advanced piping
+library(tidyverse)
+```
+
+
+Downloading the data
+```{r}
+Vestas <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Code/Machine%20learning/Training_testing/Testing_Results/Results_Vestas_single") %>% select(Model, RMSE, MAPE)
+
+Genmab <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Code/Machine%20learning/Training_testing/Testing_Results/Results_Genmab_single") %>% select(Model, RMSE, MAPE)
+
+Carlsberg <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Code/Machine%20learning/Training_testing/Testing_Results/Results_Carlsberg_Single") %>% select(Model, RMSE, MAPE)
+
+JyskeBank <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Code/Machine%20learning/Training_testing/Testing_Results/Results_JyskeBank_single") %>% select(Model, RMSE, MAPE)
+
+MaerskB <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Code/Machine%20learning/Training_testing/Testing_Results/Results_MaerskB_single") %>% select(Model, RMSE, MAPE)
+
+SimCorp <- read_csv("https://raw.githubusercontent.com/andreasbj77/Master-thesis/main/Code/Machine%20learning/Training_testing/Testing_Results/Results_SimCorp_single") %>% select(Model, RMSE, MAPE)
+```
+
+The RMSE for each model and stock
+```{r echo=FALSE}
+Vestas_RMSE <- Vestas %>% select(Model, RMSE) %>% rename("Vestas" = "RMSE")
+Genmab_RMSE <- Genmab %>% select(Model, RMSE) %>% rename("Genmab" = "RMSE")
+Carlsberg_RMSE <- Carlsberg %>% select(Model, RMSE) %>% rename("Carlsberg" = "RMSE")
+JyskeBank_RMSE <- JyskeBank %>% select(Model, RMSE) %>% rename("JyskeBank" = "RMSE")
+MaerskB_RMSE <- MaerskB %>% select(Model, RMSE) %>% rename("MaerskB" = "RMSE")
+SimCorp_RMSE <- SimCorp %>% select(Model, RMSE) %>% rename("SimCorp" = "RMSE")
+RMSE <- Vestas_RMSE %>% left_join(Genmab_RMSE, by = "Model") %>% left_join(Carlsberg_RMSE, by = "Model") %>% left_join(JyskeBank_RMSE, by = "Model") %>% left_join(MaerskB_RMSE, by = "Model") %>% left_join(SimCorp_RMSE, by = "Model")
+Average_RMSE <- data.frame("Average", mean(RMSE$Vestas), mean(RMSE$Genmab), mean(RMSE$Carlsberg), mean(RMSE$JyskeBank), mean(RMSE$MaerskB), mean(RMSE$SimCorp))
+names(Average_RMSE) <- c("Model", "Vestas", "Genmab", "Carlsberg", "JyskeBank", "MaerskB", "SimCorp")
+RMSE_mean <- rbind(RMSE, Average_RMSE)
+RMSE_mean
+```
+
+The MAPE for each stock and model 
+```{r echo=FALSE}
+Vestas_MAPE <- Vestas %>% select(Model, MAPE) %>% mutate(Stock = "Vestas") %>% pivot_wider(names_from = Model, values_from = MAPE)
+Genmab_MAPE <- Genmab %>% select(Model, MAPE) %>% mutate(Stock = "Genmab") %>% pivot_wider(names_from = Model, values_from = MAPE)
+Carlsberg_MAPE <- Carlsberg %>% select(Model, MAPE) %>% mutate(Stock = "Carlsberg") %>% pivot_wider(names_from = Model, values_from = MAPE)
+JyskeBank_MAPE <- JyskeBank %>% select(Model, MAPE) %>% mutate(Stock = "JyskeBank") %>% pivot_wider(names_from = Model, values_from = MAPE)
+MaerskB_MAPE <- MaerskB %>% select(Model, MAPE) %>% mutate(Stock = "MaerskB") %>% pivot_wider(names_from = Model, values_from = MAPE)
+SimCorp_MAPE <- SimCorp %>% select(Model, MAPE) %>% mutate(Stock = "SimCorp") %>% pivot_wider(names_from = Model, values_from = MAPE)
+MAPE <- rbind(Vestas_MAPE, Genmab_MAPE, Carlsberg_MAPE, JyskeBank_MAPE, MaerskB_MAPE, SimCorp_MAPE)
+Average_MAPE <- data.frame("Average", mean(MAPE$ANN), mean(MAPE$RNN), mean(MAPE$LSTM), mean(MAPE$biLSTM), mean(MAPE$GRU), mean(MAPE$biGRU))
+names(Average_MAPE) <- c("Stock", "ANN", "RNN", "LSTM", "biLSTM", "GRU", "biGRU")
+MAPE_mean <- rbind(MAPE, Average_MAPE)
+MAPE_mean
+```
+
+
