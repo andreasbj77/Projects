@@ -1,0 +1,818 @@
+---
+title: "SDS M2 Group Assignment"
+author: "Andreas Joergensen, Cathrine Olsen, Louise Christoffersen & Mette Moeller"
+date: "5-11-2020"
+output:
+  html_notebook:
+    code_folding: show
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	fig.align = "center")
+  rm(list=ls())
+  Sys.setenv(LANG = "en")
+  options(scipen = 5)
+```
+
+Loading relevant packages.
+```{r message=FALSE, warning=FALSE}
+library(magrittr)
+library(tidyverse)
+library(igraph)
+library(data.table)
+library(tidygraph)
+library(ggraph)
+library(jsonlite)
+library(tidytext)
+library(rtweet)
+library(sjmisc)
+library(tidymodels)
+library(SnowballC)
+library(LDAvis)
+library(tm)
+library(topicmodels)
+library(textrecipes)
+```
+
+
+# Introduction
+The movement Black Lives Matter had a resurgence in May this year after the death of George Floyd. The hashtag **#BlackLivesMatter** went viral in order to support the movement and criticize the law enforcement's misuse of power against African-American people. A counter movement called Blue Lives Matter was started to support the police. 
+
+The purpose of this report is to be able to train a machine learning model to classify tweets as either being pro **BlackLivesMatter** or pro **BlueLivesMatter**. Such a model can be used to gauge public opinion regarding the ongoing debate about police brutality. 
+
+The data used for this report is downloaded from Twitter using the `search_tweets()` function from the `rtweet` package. Firstly, tweets containing **#BlackLivesMatter** are downloaded and afterwards tweets containing **#BlueLivesMatter** are downloaded. The raw data is saved on Github for easy access.  
+
+Fetching the data from Github.
+```{r message=FALSE, warning=FALSE}
+blacktwitter <- read_csv("https://raw.githubusercontent.com/andreasbj77/SDS/main/blacktwitter.csv")
+
+bluetwitter <- read_csv("https://raw.githubusercontent.com/andreasbj77/SDS/main/bluetwitter.csv")
+```
+
+# Preprocessing
+
+The data contains 90 different variables, and only a small selection is relevant for our analysis. These variables appear in the code below.
+
+```{r}
+blacktwitter %<>%
+  select(screen_name, text, is_retweet, retweet_screen_name)
+
+bluetwitter %<>%
+  select(screen_name, text, is_retweet, retweet_screen_name)
+```
+
+
+The first step is to convert all the text in the *text* variable to lower case letters to be able to find all hashtags containing the same words regardless of lower or upper case letters. 
+
+```{r}
+blacktwitter %<>%
+  mutate(text = tolower(text))
+
+bluetwitter %<>%
+  mutate(text = tolower(text))
+```
+
+Since some tweets contain both hashtags to criticize one and support the other, any tweets containing the opposite hashtag is removed. This is to make sure that the tweets are pro their respective class.
+
+```{r}
+blacktwitter %<>%
+  filter(!(text %>% str_detect("bluelivesmatter")))
+
+bluetwitter %<>%
+  filter(!(text %>% str_detect("blacklivesmatter")))
+```
+
+Any remaning tweets in the two separate data sets are classified as **black** and **blue** respectively.
+
+```{r}
+blacktwitter %<>%
+  mutate(class = "black")
+
+bluetwitter %<>%
+  mutate(class = "blue")
+```
+
+The two data sets are then combined into one single data set.
+
+```{r}
+twitter_raw <- rbind(blacktwitter, bluetwitter)
+```
+
+To be able to perform the remaining preprocessing a *n* column indicating the number of times a tweet has been posted, along with an *ID* column is added to be able to identify individual tweets because *screen_name* cannot be used as an ID since the same person is capable of posting more than one tweet.
+
+```{r}
+twitter_raw %<>%
+  add_count(text) %>% #Adding a column 'n' 
+  tibble::rowid_to_column("ID") #Adding an 'ID' column
+```
+
+## Correcting misclassified tweets
+
+Classification has so far been performed using only hashtags and for this reason some tweets may be misclassified. To correct for some of the possible misclassification the most popular tweets - which are usually retweets -  are checked manually. Because of the huge amount of total tweets it is not possible to check manually whether they all are classified correctly or not, but by checking the most popular ones it is assumed that the majority of the tweets are classified correctly.
+
+```{r}
+twitter_raw %>%
+  distinct(text, .keep_all = TRUE) %>% #Only showing distinct tweets
+  select(text, class, n) %>%
+  filter(n >= 50) %>% #Most popular tweets are tweets 
+  arrange(desc(n))
+```
+
+Going through them there are a couple that are misclassified so that is corrected. This means that the classes not only contain supporters but also people who are just opposed to the opposite cause.
+
+```{r}
+twitter_raw %<>%
+  mutate(class= ifelse(n == 458 ,  "black", 
+                ifelse(n == 330 ,  "black", class )))
+```
+
+Checking the distribution of tweets across the two classes.
+
+```{r}
+twitter_raw %>%
+  count(class)
+```
+Since *n* is not needed for the further analysis it is removed from the data.
+
+```{r}
+twitter_raw %<>%
+  select(-n)
+```
+
+# Network Analysis
+
+The purpose of the network analysis is to investigate the network of tweets which is done by using retweets. First there is a filter insuring that only retweets are included to avoid getting isolated nodes. Next retweets of ones own tweets are filtered out which removes any loops in the data. Then the variables *text*, *is_retweet* and *n* is removed from the data.
+
+```{r}
+twitterNet <- twitter_raw %>%
+  filter(is_retweet == TRUE) %>%
+  filter(screen_name != retweet_screen_name) %>% #Removing loops
+  select(-text, -is_retweet, -ID) %>%
+  arrange(screen_name)
+```
+
+Then the edge list is created from the network data. Here the screen name of the retweeter (*screen_name*) is used as the ego (*from*) and the screen name of the retweeted (*retweet_screen_name*) is used as the alter (*to*). This gives a directed network analyzing who people are retweeting.
+
+```{r}
+twitterNet_edge <- twitterNet %>% 
+  rename(from = screen_name, to = retweet_screen_name) %>%
+  select(from, to)
+```
+
+In order to be able to join node characteristics to the edge data it is necessary to create a new data set containing the names of both *screen_name* and *retweet_screen_name* as a complete node list since people in *retweet_screen_name* does not necessarily appear in *screen_name* and vice versa. 
+
+```{r}
+name_list <- twitterNet %>%
+  select(retweet_screen_name, class) %>%
+  rename(screen_name = retweet_screen_name)
+```
+
+This is then joined to the network data so that it can be used for the graph object.
+
+```{r}
+twitterNet %<>% full_join(name_list, by = c("screen_name", "class")) %>%
+  rename(name = "screen_name")
+```
+
+To make sure that nodes do not appear more than once the command `distinct()` is used so that only one instance of the *screen_name* is kept for each person.
+
+```{r}
+twitterNet %<>%
+  distinct(name, .keep_all = TRUE)
+```
+
+Lastly a weight is created so that it is possible to see how often people retweet the same person. 
+
+```{r}
+twitterNet_edge %<>%
+  mutate(count = paste(from, to)) %>%
+  add_count(count) %>%
+  rename(weight= n) %>%
+  select(-count) %>%
+  distinct(from, to, .keep_all = TRUE)
+```
+
+After creating the edge list and node list the graph object is created. 
+
+```{r}
+g <- twitterNet_edge %>%  as_tbl_graph(directed = TRUE) %N>%
+  left_join(twitterNet, by = "name")
+```
+
+Checking that the graph object is created correctly.
+
+```{r}
+g
+```
+## Visualization
+
+
+To get an overview of the complete network all nodes and edges are plotted below.
+
+```{r fig.width=20, warning=FALSE}
+set.seed(1337)
+g %>%
+  ggraph(layout = 'stress') + 
+  geom_edge_link(aes(width = weight), alpha = 0.2) + 
+  geom_node_point(aes(color = class)) +
+  scale_color_brewer(palette = "Set1") +
+  theme_graph()
+```
+
+The first plot shows all the different types of networks that exists in this data. Furthest above are two big networks that look like what one might expect of networks. The plot also shows several smaller circular networks, and a lot of small networks consisting of a few nodes. The overall impression of all the networks is that nodes of one class seem to be mostly connected to nodes of same class with only a few exceptions. These exceptions are most likely caused by misclassification. 
+
+To create a more meaningful graph the centrality eigenvalues are calculated in order to filter the smaller networks of a few retweets away.
+
+```{r}
+g <- g %N>%
+  mutate(centrality_eigen = centrality_eigen(weights = weight))
+
+bind_cols(
+          g %N>%
+            select(name, centrality_eigen) %>%
+            arrange(desc(centrality_eigen)) %>%
+            as_tibble()) %>% 
+  mutate_if(is.numeric, round, 12) %>%
+  arrange(desc(centrality_eigen))
+```
+
+Based on eigenvalues 'balleralert' seems to be the most important person in the network. By filtering for his name in *retweet_screen_name* it is seen that he has posted a tweet classified as **black** which has been retweeted 8310 times.
+
+```{r}
+twitter_raw %>%
+  filter(retweet_screen_name == "balleralert") %>%
+  add_count(retweet_screen_name) %>%
+  select(retweet_screen_name, n, class,text) %>%
+  head(1)
+```
+
+To filter away smaller networks only nodes with an eigenvalue above 0.0000000001 is plotted below.
+
+The plot below shows the larger networks. There are two large separate networks here that are only connected by a few individuals that have retweeted things from both sides of the debate.
+Both networks follow the same structure with a few tweets being retweeted a lot. The broad method of classification used when collecting the data also has its drawbacks which can be seen in the networks. Some of the offshoots in the networks are the opposite class than the rest of the network they are in and this might be an indicator that those tweets have been classified wrongly. This could have been overcome by thoroughly going through the individual tweets, but that was unfortunately not possible in the time frame given.
+
+```{r fig.width=20, warning=FALSE}
+set.seed(1337)
+g %>%
+  filter(centrality_eigen >= 0.0000000001) %>%
+  ggraph(layout = 'stress') + 
+  geom_edge_link(aes(width = weight), alpha = 0.2) + 
+  geom_node_point(aes(color = class, size = centrality_eigen)) +
+  scale_color_brewer(palette = "Set1") +
+  theme_graph()
+```
+
+
+### Network measures
+
+```{r}
+Table <- tibble(Density = edge_density(g),
+                Transitivity = transitivity(g, type ="global"),
+                Reciprocity = reciprocity(g),
+                Assortativity = assortativity_nominal(g, V(g)$class %>% as.factor(), directed = TRUE))
+Table
+```
+As might have been expected from looking at the plots all of the network measures are rather low except assortativity. Density measures the number of connections in relation to the possible number of connections which obviously is low in this case. Transitivity and reciprocity are low since people often retweet the original tweet, and the creaters of the original tweets are often not included as retweeters themselves (included in *screen_name*) in the data set. Since **black** and **blue** are separated in two different parts of the network it is not surprising that the assortativity is high.
+
+
+# NLP
+
+In this section the data will be used to create a model that is able to classify the tweets correctly into the classes created at the start of this report. This is done by first exploring and preprocessing the data and then by using an LDA model to create a topic model. Finally a classification model will be created using supervised machine learning.
+
+## Preprocessing and EDA
+
+### Tokenizing
+
+Tokenizing is performed to be able to investigate the importance of each word occurring in the data. Firstly, a new data set *tweets_tidy* only containing distinct tweets are constructed. Furthermore each tweet is decomposed into words.
+
+```{r}
+tweets_tidy <- twitter_raw %>%
+   distinct(text, .keep_all = TRUE) %>% #Showing only distinct tweets
+   unnest_tokens(word, text, token = "tweets") %>% #Tokenizing
+   select(ID,screen_name, word, class)
+```
+
+### Investigating *tweets_tidy*
+
+Here the *tweets_tidy* data set is investigated to see which changes need to be made before using it in a machine learning model.
+
+Taking a look at the top 10 words.
+```{r}
+tweets_tidy %>% 
+  count(word, sort = TRUE) %>%
+  head(10)
+```
+
+Unsurprisingly **#bluelivesmatter** and **#blacklivesmatter** are among the top 10 words. This makes sense since all tweets in the data contain one of the hashtags. The remaining words are all stopwords containing only a little information. For this reason stopwords will be removed in the next section. 
+
+Investigating special characters.
+
+```{r}
+tweets_tidy %>%
+    group_by(word) %>%
+ filter(n() > 50) %>%
+   filter((word %>% str_detect('[^[:alnum:]]'))) %>% 
+   count(word) %>%
+   arrange(desc(n))
+```
+
+The top words containing special characters are hashtags related to the two causes along with mentions of the two Presidential candidates. When removing special characters like # and @ the words after are not removed so special characters should be removed. This information might help a machine learning model classify tweets. However expressions like '<u+0001f4e3>', which are smiley's or other emojies, should be removed since they carry no meaning in relation to a classification problem.
+
+Investigating the significance of numbers.
+
+```{r}
+tweets_tidy %>%
+  group_by(word) %>%
+ filter(n() > 50) %>%
+   filter((word %>% str_detect('[1234567890]'))) %>% 
+   count(word) %>%
+   arrange(desc(n))
+```
+There does not seem to be any non-meaningful combinations of numbers present in the data so there is no need to remove numbers from *tidy_data*.
+
+Detecting slang in the data searching for commonly used slang. These words have been compared to both a dictionary for slang and the dictionary for stopwords, to see if they should be kept. The reason for this search is that slang is often stopwords spelled incorrectly, and they would therefore be removed under normal circumstances.
+
+```{r}
+tweets_tidy %>%
+    group_by(word) %>%
+ filter(n() > 50) %>%
+   filter((word %>%str_detect('^dont$|^aint$|^youre$|^yall$|^shes$|^didnt|^lil$|^hes$|^wit$|^wanna$|^gotta$|^gonna$|^wont$|^ive$|^bout$|^imma$|^idk$|^couldnt$|^isnt$|^wouldnt$|^wasnt$|^dem$|^theyre$|^doesnt$|^outta$'))) %>%
+   count(word) %>%
+  arrange(desc(n))
+```
+Only 3 of the words appear more than 50 times and for this reason those 3 words should be removed in the next section.
+
+
+
+### Tidying
+
+Since the tweets are classified according to the hashtags **#BlackLivesMatter** and **#BlueLivesMatter** these words are excluded from *tweets_tidy*. The steps from the previous section is removed below.
+
+```{r}
+tweets_tidy %<>%
+ filter(!(word %>% str_detect('blacklivesmatter'))) %>%
+ filter(!(word %>% str_detect('bluelivesmatter'))) %>%
+ filter(!(word %>% str_detect('^<'))) %>%
+ filter(!(word %>%   str_detect('^dont$|^youre$|^doesnt$'))) %>% #removing slang 
+ mutate(word = word %>% str_remove_all('[^[:alnum:]]')) %>% ## removing all special characters
+ filter(!(word %>% str_detect('^amp|^http'))) %>% # Removing Twitter specific stuff
+ filter(str_length(word) > 2 ) %>% # Removing words with less than  3 characters
+ group_by(word) %>%
+ filter(n() > 50) %>% # removing words occurring less than 50 times
+ ungroup() %>%
+ anti_join(stop_words, by = 'word') # removing stopwords
+```
+
+
+
+```{r}
+tweets_tidy %>% count(word,sort = TRUE)
+```
+
+Since there does not appear to be multiple versions of the same stem in the remaining words in the data stemming is not performed.
+
+### TF-IDF
+
+Up to now the most important words has been the words appearing the most times. Term Frequency - Inverse Document Frequency is a measure of originality since a word has a higher weight the more times it appears in a tweet, but the weight decreases the more tweets it appears in.  
+
+```{r}
+tweets_tidy %<>%
+  add_count(ID, word) %>%
+  bind_tf_idf(term = word,
+              document = ID,
+              n = n)
+```
+
+Viewing the top 10 words according to TF-IDF.
+
+```{r}
+tweets_tidy %>%
+  count(word, wt = tf_idf, sort = TRUE) %>%
+  head(10)
+```
+
+Many of the same words appear on this list compared to the unweighted list with a small difference in the placement of the words.
+
+The top 20 words according to TF-IDF is plotted for each class below.
+
+```{r}
+labels_words_count <- tweets_tidy %>%
+  group_by(class) %>%
+  count(word, wt = tf_idf,   sort = TRUE, name = "number") %>%
+  dplyr::slice(1:20) %>%
+  mutate(word = reorder_within(word, wt = tf_idf, by = number, within = class)) 
+lw_c <- labels_words_count %>%
+  ggplot(aes(x = word, y = number, fill = class)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "TF-IDF ") +
+  facet_wrap(~class, ncol = 2, scales = "free_y") +
+  coord_flip() +
+  scale_x_reordered()
+lw_c
+```
+The plot shows that the top words in class *blue* is mainly focused on law enforcement while *black* is more focused on race. Both classes has an element of politics related to the election where mentions of Joe Biden appears in *black* while Donald Trump appears in multiple versions in class *blue*.
+
+
+## Topic modelling
+
+Topic modelling is performed using an LDA model. This function requires a document term matrix as input so the *tweets_tidy* is transformed into a dtm.
+
+```{r}
+tweets_dtm <- tweets_tidy %>%
+  cast_dtm(document = ID, term = word, value = n)
+```
+
+The LDA is constructed based on 4 topics because trail and error indicated this as the optimal amount of topics.
+
+```{r}
+tweets_lda <- tweets_dtm %>% 
+  LDA(k = 4, method = "Gibbs",
+      control = list(seed = 1337))
+```
+
+### Word-topic probabilities
+
+By extracting the $\beta$ value from the LDA it is possible to investigate the probability of a word appearing in a certain topic. Below is a plot of the top 10 words in each of the 4 chosen topics.
+
+```{r fig.height=6, fig.width=10}
+lda_beta <- tweets_lda %>% 
+  tidy(matrix = "beta") %>%
+  group_by(topic) %>%
+  arrange(topic, desc(beta)) %>%
+  dplyr::slice(1:10) %>%
+  ungroup() 
+
+lda_beta %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  group_by(topic, term) %>%    
+  arrange(desc(beta)) %>%  
+  ungroup() %>%
+  ggplot(aes(term, beta, fill = as.factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(title = "Top 10 terms in each LDA topic",
+       x = NULL, y = expression(beta)) +
+  facet_wrap(~ topic, ncol = 2, scales = "free_y")
+```
+
+Topic 1 seems to consist of various words related to politics - yet some seem somewhat unrelated. Topic 2 contain words related to race and beliefs, topic 3 is related to law enforcement, and topic 4 is mostly related to the election.
+
+### Document-topic probabilities
+
+$\gamma$ from the LDA shows the proportion of words in a given document from the different topics. $\gamma$ is extracted below.
+
+```{r}
+lda_gamma <- tweets_lda %>% 
+  tidy(matrix = "gamma")
+```
+
+In order to view the proportions of words from each topic for a specific document text the *twitter_raw* data is joined to *lda_gamma*. 
+
+```{r}
+twitter_raw$ID  %<>% as.character()
+
+lda_gamma %<>%
+  left_join(twitter_raw %>% select(ID, text, class), by = c('document' = 'ID'))
+```
+
+Selecting a specific document to investigate. 
+
+```{r}
+lda_gamma %>%
+  filter(document == 15314)
+```
+As seen above the dominant topic in *document* 15,314 is topic 4 which earlier was categorized as a topic related to the election. Looking at the text it is obvious that the tweet actually is related to the election. 
+
+To investigate the most dominant topics in each of the two classes the mean of $\gamma$ is computed and arranged descending. 
+
+```{r}
+lda_gamma %>%
+  group_by(class, topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(class, desc(gamma))
+```
+
+Overall the words from each topic in the classes are rather evenly distributed with small differences. When looking at class **black** it is seen that topic 1 (politics) is the most dominant topic along with topic 2 (race and beliefs). Unsurprisingly words from topic 3 (law enforcement) are the least used in this class.
+In contrast topic 3 is the most dominant when considering class **blue** which is to be expected while topic 1 is the least dominant.
+
+
+## Supervised machine learning
+
+
+Loading relevant packages for supervised machine learning.
+```{r}
+library(FactoMineR)
+library(factoextra)
+library(ranger)
+library(xgboost)
+```
+
+### Preprocessing
+
+Creating a data set for the supervised machine learning based *twitter_raw*. The tweets are kept distinct so that the same tweet does not appear more than once.
+```{r}
+twitter_ML <- twitter_raw %>%
+  distinct(text, .keep_all = TRUE)
+```
+
+Checking the distribution of tweets in the two classes.
+```{r}
+twitter_ML %>%
+  count(class)
+```
+Since the classes are rather uneven it is necessary to downsample when training the models.
+
+Selecting the *classes* and *text* as the variables of interest and renaming *classes* to *y* since it is the response variable. Additionally *ID* is kept so that it can be used later in case of misclassification by the model, but is excluded from the model.
+```{r}
+data <- twitter_ML %>%
+  select(class, text, ID) %>%
+  rename(y = class) %>%
+  mutate(y = y  %>% as.factor())
+```
+
+
+Separating the data into test and training data sets.
+```{r}
+set.seed(1337)
+data_split <- initial_split(data, prop = 0.75, strata = y)
+
+data_train <- data_split  %>%  training()
+data_test <- data_split %>% testing()
+```
+
+
+Creating a recipe that reproduces the tokenizesation and filtering the *text* performed in the preproccesing.
+```{r}
+set.seed(1337)
+data_recipe <- data_train %>%
+  recipe(y ~ text) %>% #excluding ID from the model
+  step_mutate(text = str_replace_all(text, "blacklivesmatter", "")) %>% # Removing word
+  step_mutate(text = str_replace_all(text, "bluelivesmatter", "")) %>% # Removing word
+  step_mutate(text = str_replace_all(text,"^dont$|^youre$|^doesnt$", "")) %>% #removing slang
+  step_mutate(text = str_replace_all(text, "&.;|<|amp|^http|#|@", "")) %>% #removing symbols and emojis
+  step_mutate(text = str_replace_all(text, "\\b\\w{1,2}\\b", "")) %>% #removing all words < 3 characters
+  step_filter(text != "") %>% #Removing empty tweets
+  step_tokenize(text, token = "tweets") %>% # tokenizing
+  step_tokenfilter(text, min_times = 50) %>%  # Filtering out rare words
+  step_stopwords(text, keep = FALSE) %>% # Filtering out stopwords
+  step_tfidf(text) %>% # TFIDF weighting
+  step_pca(all_predictors(), num_comp = 10) %>% # Dimensionality reduction via PCA
+  themis::step_downsample(y) # For downsampling class imbalances
+```
+
+
+### Model creation
+
+Three models are created to be used for the classification: A decision tree, random forest and an xgboost.
+
+
+```{r}
+set.seed(1337)
+model_dt <- decision_tree(mode = 'classification',
+                          cost_complexity = tune(),
+                          tree_depth = tune(), 
+                          min_n = tune()
+                          ) %>%
+  set_engine('rpart') 
+
+
+model_rf <- rand_forest(mode = 'classification',
+                        trees = 25, #number of trees chosen for the ensemble
+                        mtry = tune(),
+                        min_n = tune()
+                        ) %>%
+  set_engine('ranger', importance = 'impurity')
+
+
+model_xg <- boost_tree(mode = 'classification', 
+                       trees = 100, #number of trees chosen for the ensemble
+                       mtry = tune(), 
+                       min_n = tune(), 
+                       tree_depth = tune(), 
+                       learn_rate = tune()
+                       ) %>%
+  set_engine("xgboost") 
+```
+
+A general workflow is created based on the recipe and the models are added to create a specific workflow for each.
+
+```{r}
+set.seed(1337)
+workflow_general <- workflow() %>% #Adding recipe to the general workflow
+  add_recipe(data_recipe) 
+
+workflow_rf <- workflow_general %>% #Adding the models to the workflow
+  add_model(model_rf)
+
+workflow_dt <- workflow_general %>%
+  add_model(model_dt)
+
+workflow_xg <- workflow_general %>%
+  add_model(model_xg)
+```
+
+The data is then divided into folds.
+
+```{r}
+set.seed(1337)
+data_resample <- data_train %>% 
+  vfold_cv(strata = y,
+           v = 3, #three folds are chosen
+           repeats = 3)
+```
+
+#### Hyperparameter tuning
+
+To create a more accurate model hyperparamters are tuned.
+
+```{r}
+set.seed(1337)
+tune_dt <-
+  tune_grid(
+    workflow_dt,
+    resamples = data_resample,
+    grid = 10
+  )
+```
+
+```{r}
+set.seed(1337)
+tune_rf <-
+  tune_grid(
+    workflow_rf,
+    resamples = data_resample,
+    grid = 10
+  )
+```
+
+```{r}
+set.seed(1337)
+tune_xg <-
+  tune_grid(
+    workflow_xg,
+    resamples = data_resample,
+    grid = 10
+  )
+```
+
+The best parameters based on the tuning are then saved to be used in the finalized workflows.
+
+```{r}
+set.seed(1337)
+best_param_dt <- tune_dt %>% select_best(metric = 'roc_auc') #choosing the best parameters
+
+best_param_rf <- tune_rf %>% select_best(metric = "roc_auc")
+
+best_param_xg <- tune_xg %>% select_best(metric = 'roc_auc')
+
+workflow_final_rf <- workflow_rf %>%
+  finalize_workflow(parameters = best_param_rf) #adding the tuning to the existing workflow
+
+workflow_final_dt <- workflow_dt %>%
+  finalize_workflow(parameters = best_param_dt)
+
+workflow_final_xg <- workflow_xg %>%
+  finalize_workflow(parameters = best_param_xg)
+```
+
+
+### Model selection
+
+The final models are fitted to the training data.
+
+```{r}
+set.seed(1337)
+fit_rf <- workflow_final_rf %>%
+  fit(data_train)
+
+fit_dt <- workflow_final_dt %>%
+  fit(data_train)
+
+fit_xg <- workflow_final_xg %>%
+  fit(data_train)
+```
+
+
+The true values from the training data is collected and compared to the predicted values based on accuracy.
+
+```{r}
+set.seed(1337)
+train_pred_collected <- tibble(
+  truth = data_train %>% pull(y) %>% as.factor(),
+  dt = fit_dt %>% predict(new_data = data_train) %>% pull(.pred_class),
+  rf = fit_rf %>% predict(new_data = data_train) %>% pull(.pred_class),
+  xg = fit_xg %>% predict(new_data = data_train) %>% pull(.pred_class),
+  ) %>%
+  pivot_longer(cols = -truth,
+               names_to = 'model',
+               values_to = '.pred')
+
+train_pred_collected %>%
+  group_by(model) %>%
+  accuracy(truth = truth, estimate = .pred) %>%
+  select(model, .estimate) %>%
+  arrange(desc(.estimate))
+```
+
+### Model evaluation
+
+Based on these estimates the random forest model is selected as the best model. A confusion matrix is formed to see how well the model has performed at correctly classifying the true values.
+
+```{r}
+set.seed(1337)
+train_pred_col <- tibble(
+  truth = data_train %>% pull(y) %>% as.factor(),
+  rf = fit_rf %>% predict(new_data = data_train) %>% pull(.pred_class),
+  ) %>%
+  pivot_longer(cols = -truth,
+               names_to = 'model',
+               values_to = '.pred')
+train_cm_rf <- train_pred_col %>% conf_mat(truth, .pred)
+train_cm_rf %>% autoplot(type = "heatmap")
+```
+Additionally a table is provided that shows the accuracy in the individual classes.
+
+```{r}
+set.seed(1337)
+train_pred_col %>%
+  group_by(truth) %>%
+  accuracy(truth = truth, estimate = .pred) %>%
+  select(truth, .estimate) %>%
+  arrange(desc(.estimate))
+```
+
+The models seems to be performing very well in correctly classifying tweets in the **black** class with an accuracy of 93%. The accuracy of the **blue** class lacks a bit behind with an accuracy of 74%.
+
+The model is then fitted to the test data to see how well it performs on new and unseen data.
+
+```{r}
+set.seed(1337)
+test_pred_col <- tibble(
+  truth = data_test %>% pull(y) %>% as.factor(), #Takes the true values from the test data
+  rf = fit_rf %>% predict(new_data = data_test ) %>% pull(.pred_class),
+  ) %>% 
+  pivot_longer(cols = -truth,
+               names_to = 'model',
+               values_to = '.pred')
+
+test_pred_col %>%
+  group_by(model) %>%
+  accuracy(truth = truth, estimate = .pred) %>%
+  select(model, .estimate) 
+```
+The overall accuracy has fallen a bit but that is to be expected. An accuracy of 73% is still rather good.
+
+
+As before a confusion matrix and table of classification accuracy can be seen below.
+
+```{r}
+set.seed(1337)
+test_cm_rf <- test_pred_col %>% conf_mat(truth, .pred)
+test_cm_rf %>% autoplot(type = "heatmap")
+```
+```{r}
+set.seed(1337)
+test_pred_col %>%
+  group_by(truth) %>%
+  accuracy(truth = truth, estimate = .pred) %>%
+  select(truth, .estimate) %>%
+  arrange(desc(.estimate))
+```
+
+The model still performs well on the **black** class, meaning that it is able to correctly predict whether a tweet supports the **blacklivesmatter** cause. On the other hand the model performs poorly when dealing with tweets that support the **bluelivesmatter** cause.
+
+
+To get a better look at what makes the model predict the **blue** class wrong the tweets that where classified wrong is examined. 
+
+```{r}
+set.seed(1337)
+id_test <- data_test %>% pull(ID)
+pred_inspect <- test_pred_col %>% 
+  mutate(correct = truth == .pred) %>%
+  bind_cols(ID = id_test %>% as.character()) %>%
+  left_join(twitter_raw %>% select(ID, text), by = 'ID') %>%
+  relocate(ID)
+pred_inspect %>% 
+  filter(correct == FALSE) %>%
+  filter(truth == "blue") %>%
+  select(text, truth, .pred, correct) %>%
+  head(10)
+```
+
+From these tweets it seems that the model struggles when tweets that are categorized as **blue** mentions politics and the election. This means that the current American election is likely causing some interference in the model. This might have been avoided if the data was collected from before the election began in earnest.
+
