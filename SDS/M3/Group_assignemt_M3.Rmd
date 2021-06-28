@@ -1,0 +1,690 @@
+---
+title: "SDS M3 Group Assignment"
+author: "Andreas Joergensen, Cathrine Olsen, Louise Christoffersen & Mette Moeller"
+date: "9-12-2020"
+output:
+  html_notebook:
+    code_folding: show
+    df_print: paged
+    theme: flatly
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE,
+                     message=FALSE,
+                     comment=FALSE, 
+                     fig.align="center"
+                     )
+```
+
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(keras) #For deep learning models
+library(tidymodels)
+library(tidyquant) # For getting stock data
+library(ggpubr) #package that helps mixing multiple plots on the same page
+```
+
+# Introduction and data
+
+The aim of this assignment is to build a supervised machine learning model and a deep learning model capable of predicting the price of a stock tomorrow. A lot of people has tried to build such a model capable of predicting prices with a high accuracy but without great success. Therefore we did not expect to achieve a model capable of very precise predictions - and if we did we probably would have kept it to ourselves! 
+
+Earlier stock investment was mainly accessible for professional stock brokers but since the release of liberty bonds during the First World War securities became available for the general population. Today it is common for ordinary people to hold stocks and the development in stock prices is therefore of interest to the public.
+
+4 different stocks are chosen for this assignment since stock prices often correlate in some way. Apple is chosen as the main stock of interest and the models are constructed to predict the price of Apple stocks tomorrow. The price is predicted based on the price of Apple stocks today along with the price of 3 other stocks - ITW, IBM and Tesla. Stock prices over 9 years are fetched for each stock.
+
+The data is fetched directly from Yahoo Finance using the `tidyquant` package. (A data set containing these stocks is available at [Github](https://raw.githubusercontent.com/andreasbj77/SDS/main/M3/aktie%20data.csv)).
+
+```{r}
+aapl = c("AAPL") 
+apple <- tq_get(aapl,
+               from = "2010-11-30",
+               to = "2019-11-30",
+               get = "stock.prices")
+
+it = c("ITW") 
+ITW <- tq_get(it,
+               from = "2010-11-30",
+               to = "2019-11-30",
+               get = "stock.prices")
+
+iibm = c("IBM") 
+ibm <- tq_get(iibm,
+               from = "2010-11-30",
+               to = "2019-11-30",
+               get = "stock.prices")
+
+TSLA = c("TSLA") 
+TESLA <- tq_get(TSLA,
+               from = "2010-11-30",
+               to = "2019-11-30",
+               get = "stock.prices")
+```
+
+
+## Data exploration
+
+To investigate the data and the class of the variables a `glimpse()` of the data is shown. 
+
+```{r}
+apple %>% glimpse()
+```
+
+Only the dates and the closing prices are used for prediction. The closing prices are chosen over the other prices since these reflect the next days trading prices best.
+
+```{r}
+apple %<>%
+  select(date, close) %>%
+  drop_na()
+
+ibm %<>%
+  select(date, close) %>%
+  drop_na()
+
+ITW %<>%
+  select(date, close) %>%
+  drop_na()
+
+TESLA %<>%
+  select(date, close) %>%
+  drop_na()
+```
+
+Merging the data sets together and renaming the variables to show where the closing price came from.
+```{r}
+data <- left_join(apple, ibm, by = "date")
+data <- left_join(data, ITW, by = "date")
+data <- left_join(data, TESLA, by = "date")
+
+data %<>%
+  rename(Apple = "close.x", IBM = "close.y", ITW = "close.x.x", TESLA = "close.y.y")
+```
+
+
+Tidying up in the environment by removing the old data sets.
+```{r}
+rm(apple, ibm, ITW, TESLA, aapl, it, iibm, TSLA)
+```
+
+The plot below shows the development in each of the stocks in the 9 year period. Some of the stocks seem to be positively correlated and hence move in the same direction eg. Apple and ITW while others seem to be negatively correlated.
+```{r}
+total_data <- gather(data, company, value, -date)
+
+total_data %>%
+  ggplot(aes(x = date, y = value, color = company)) +
+  geom_line()  +
+  labs(x = 'Date', y = "Closing Price")
+```
+Removing unneeded data from the environment.
+```{r}
+rm(total_data)
+```
+
+The variance-covariance matrix is shown below. As expected the correlation between Apple and ITW is strong and positive whereas Apple is negatively correlated with IBM. Overall there seem to be a rather high correlation between Apple and the other stocks, and therefore it is expected that they to some extend are capable of explaining some of the movements in the Apple stock.
+```{r}
+data %>%
+  select(-date) %>%
+  cor()
+```
+
+
+
+For both the supervised machine learning part and for the deep learning part all variable inputs are scaled since it's best practice.
+```{r}
+data$Apple %<>% scale(center = FALSE, scale = TRUE)
+data$IBM %<>% scale(center = FALSE, scale = TRUE)
+data$ITW %<>% scale(center = FALSE, scale = TRUE)
+data$TESLA %<>% scale(center = FALSE, scale = TRUE)
+
+att <- attr(data$Apple, 'scaled:scale') #
+
+data$Apple %<>% as.numeric()
+data$IBM %<>% as.numeric()
+data$ITW %<>% as.numeric()
+data$TESLA %<>% as.numeric()
+```
+
+
+# Supervised Machine Learning
+
+## Preprocessing
+
+Since the *data* variable is unneeded for the prediction it is removed from the data set used for the unsupervised machine learning part, *data_sup*. Since the aim is to predict the price of Apple stocks tomorrow a new variable *Appletomorrow* is created which indicates the price of the stock the following day.
+
+```{r}
+data_sup <- data %>%
+  select(-date) %>%
+  mutate(Appletomorrow = Apple %>% lead(1)) %>%
+  mutate(Appletomorrow = ifelse(is.na(Appletomorrow), lag(Apple, 1), Appletomorrow)) %>% #For the most recent observation the price of Apple and Appletomorrow are identical
+  relocate(Appletomorrow)
+```
+
+
+## Splitting the data
+
+The data is split into a training set consisting of 80 percent of the data while the remaining 20 percent is test data. 
+```{r}
+data_split_sup <- data_sup %>% initial_time_split(prop = 0.80)
+
+data_train_sup <- data_split_sup %>% training()
+data_test_sup <- data_split_sup %>% testing()
+```
+
+A recipe is defined indicating that *Appletomorrow* is the response variable.
+```{r}
+data_recipe_sup <- data_train_sup %>%
+  recipe(Appletomorrow ~ .) 
+```
+
+
+## Defining the models
+
+3 models are presented in this section - an elastic net, a random forest and an XgBoost model.
+
+```{r}
+set.seed(1337)
+
+#Elastic net model
+model_el <-linear_reg(mode = 'regression',
+                      penalty = tune(),
+                      mixture = tune()) %>%
+  set_engine("glmnet")
+
+#Random forest model
+model_rf <- rand_forest(mode = 'regression',
+                        trees = 25, 
+                        mtry = tune(),
+                        min_n = tune()
+                        ) %>%
+  set_engine('ranger', importance = 'impurity')
+
+#XgBoost model
+library(xgboost)
+model_xg <- boost_tree(mode = 'regression', 
+                       trees = 100,
+                       mtry = tune(), 
+                       min_n = tune(), 
+                       tree_depth = tune(), 
+                       learn_rate = tune()
+                       ) %>%
+  set_engine("xgboost")
+```
+
+A general workflow along with specialized workflows for each of the models are created.
+```{r}
+workflow_general <- workflow() %>% #Adding recipe to the general workflow
+  add_recipe(data_recipe_sup) 
+
+workflow_el <- workflow_general %>%
+  add_model(model_el)
+
+workflow_rf <- workflow_general %>% #Adding the models to the workflow
+  add_model(model_rf)
+
+
+workflow_xg <- workflow_general %>%
+  add_model(model_xg)
+```
+
+Creating a 3-fold resample with 3 repeats.
+```{r}
+set.seed(1337)
+data_resample <- vfold_cv(data_train_sup, 
+                          strata = Appletomorrow,
+                          v = 3,
+                          repeats = 3)
+```
+
+The parameters for each of the models are tuned.
+```{r}
+set.seed(1337)
+#Tuning parameters in the elastic net model
+tune_el <-
+  tune_grid(
+    workflow_el, 
+    resamples = data_resample,
+    grid = 10 
+  )
+
+#Tuning parameters in the random forest model
+tune_rf <-
+  tune_grid(
+    workflow_rf,
+    resamples = data_resample,
+    grid = 10
+  )
+
+#Tuning parameters in the XgBoost model
+tune_xg <-
+  tune_grid(
+    workflow_xg,
+    resamples = data_resample,
+    grid = 10
+  )
+```
+
+Collecting the best parameters for each of the models.
+```{r}
+best_param_el <- tune_el %>% select_best(metric = 'rmse') %>%
+    mutate(model = "Elastic net", mtry = "", min_n = "", tree_depth = "", learn_rate="") %>%
+  relocate(model)
+
+best_param_rf <- tune_rf %>% select_best(metric = 'rmse') %>%
+      mutate(model = "Random Forest", penalty = "", mixture = "", tree_depth = "", learn_rate="") %>%
+  relocate(model)
+
+best_param_xg <- tune_xg %>% select_best(metric = 'rmse') %>%
+  mutate(model = "XgBoost", penalty = "", mixture = "") %>%
+  relocate(model)
+
+rbind(best_param_el, best_param_rf, best_param_xg)
+```
+
+Creating the final workflows where the best parameters are added.
+```{r}
+workflow_final_el <- workflow_el %>%
+  finalize_workflow(parameters = best_param_el)
+
+workflow_final_rf <- workflow_rf %>%
+  finalize_workflow(parameters = best_param_rf)
+
+workflow_final_xg <- workflow_xg %>%
+  finalize_workflow(parameters = best_param_xg)
+```
+
+Fitting the models on the training data.
+```{r}
+fit_el <- workflow_final_el %>%
+  fit(data_train_sup)
+
+fit_rf <- workflow_final_rf %>%
+  fit(data_train_sup)
+
+fit_xg <- workflow_final_xg %>%
+  fit(data_train_sup)
+```
+
+Gathering all the predicted and observed prices in *pred_collected* in order to calculate root mean squared error for each of the models.
+```{r, warning = FALSE, message = FALSE}
+set.seed(1337)
+pred_collected <- tibble(
+  truth = data_train_sup %>% pull(Appletomorrow), 
+  base = mean(truth), 
+  el = fit_el %>% predict(new_data = data_train_sup) %>% pull(.pred), 
+  rf = fit_rf %>% predict(new_data = data_train_sup) %>% pull(.pred),
+  xg = fit_xg %>% predict(new_data = data_train_sup) %>% pull(.pred)) %>% 
+  pivot_longer(cols = -truth, 
+               names_to = 'model',
+               values_to = '.pred')
+
+pred_collected %>%
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred) %>% 
+  select(model, .estimate) %>%  
+  arrange(.estimate) 
+```
+Based on the RMSEs the random forest model makes the most accurate predictions. The model is used for predictions on the test data set.
+```{r, warning = FALSE, message = FALSE}
+set.seed(1337)
+pred_test <- tibble(
+  truth = data_test_sup %>% pull(Appletomorrow),
+  rf = fit_rf %>% predict(new_data = data_test_sup) %>% pull(.pred)) %>% 
+  pivot_longer(cols = -truth,
+               names_to = 'model',
+               values_to = '.pred')
+
+pred_test %>%
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred) %>% 
+  select(model, .estimate) %>%  
+  arrange(.estimate)
+```
+On the test set the RMSE rises. By rescaling the RMSE it's seen that the predictions of the random forest model on average is 8.84 dollars off.
+
+```{r}
+set.seed(1337)
+pred_test %<>%
+  mutate(truth = truth * att) %>%
+  mutate(.pred = .pred * att)
+
+pred_test %>%
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred) %>% 
+  select(model, .estimate) %>%  
+  arrange(.estimate)
+```
+The predictions of the random forest model are plotted below. 
+```{r}
+pred_test %>%
+  ggplot(aes(x = truth, y = .pred)) + 
+  geom_abline(lty = 2, color = "gray80", size = 1.5) + 
+  geom_point(alpha = 0.4, size = 0.9, color = "#009E73") +
+  labs(
+    x = "Observed stock price",
+    y = "Predicted stock price"
+      )
+```
+The grey line indicates where the predicted values are exual to the observed values. The model seems to underpredict for higher stock prices. 
+
+
+```{r}
+rm(data_recipe_sup, data_resample, data_split_sup, data_sup, data_test_sup, data_train_sup, fit_el, fit_rf, fit_xg, model_el, model_rf, model_xg, pred_collected, pred_test, tune_el, tune_rf, tune_xg, workflow_el, workflow_rf, workflow_xg, workflow_final_el, workflow_final_rf, workflow_final_xg,workflow_general, best_param_el, best_param_rf, best_param_xg)
+```
+
+
+# Deep Learning / Neural Networks
+
+Ordinary supervised machine learning models as presented in the section above have no "memory" which might explain why the models have a hard time predicting the true values. In order to fix this problem deep learning models are created. 
+
+As in the previous section the data is split into a training and a test data set.
+```{r}
+data_split_deep <- data %>% initial_time_split(prop = 0.8)
+
+data_train_deep <- data_split_deep %>% training()
+data_test_deep <- data_split_deep %>% testing()
+```
+
+
+*x_train* and *x_test* are defined as containing only the explanatory stocks without the date variable. Simultaniously *y_train* and *y_test* are created containing the response variable - the lead of Apple as in the supervised learning part. 
+```{r}
+#Train data
+x_train <- data_train_deep %>% select(-date) %>% as.matrix()
+
+y_train <- data_train_deep %>%
+  select(-date) %>%
+  mutate(Apple = Apple %>% lead(1)) %>%
+  mutate(Apple = ifelse(is.na(Apple), lag(Apple, 1), Apple)) %>%
+  select(Apple)
+
+
+#Test data
+x_test <- data_test_deep %>% 
+  select(-date) %>%
+  as.matrix()
+
+y_test <- data_test_deep %>%
+  select(-date) %>%
+  mutate(Apple = Apple %>% lead(1)) %>%
+  mutate(Apple = ifelse(is.na(Apple), lag(Apple, 1), Apple)) %>%
+  select(Apple)
+```
+
+Since Keras models requires tensors as input the data is transformed into tensors.
+```{r}
+x_train %>% nrow()
+x_test %>% nrow()
+```
+
+The tensors for the explanatory variables are tensors of dimensions 1812 observations, 1 timestep and 4 features for the training set and 454 observations, 1 timestep and 4 features for the test data set. 
+For the dependent variables the tensors are of the same amount of observations but only 1 feature and no timesteps.
+```{r}
+x_train_arr <- x_train %>% array_reshape(dim = c(1812, 1, 4))
+x_test_arr <- x_test %>% array_reshape(dim = c(454, 1, 4))
+
+y_train_arr <- y_train %>% pull(Apple) %>% as.numeric() %>% array_reshape(dim = c(length(.), 1))
+y_test_arr <- y_test %>% pull(Apple) %>% as.numeric() %>% array_reshape(dim = c(length(.), 1))
+```
+
+## Creating models
+
+4 different model versions are shown in this section. Common to all of them is that the number of units are 32. A high number of units makes it easier to train the model but with a higher risk of overfitting. 32 units have shown to be a reasonable compromise between trainability and overfitting. Since the data is scaled but not bound between values of -1 and 1 *relu* is used as activation function. All of the models are compiled using an *adam* optimizer and *mse* as loss function and metric due to the fact that this is a regression problem. To be able to compare the models they are all trained over 10 epochs in batch sizes of 64. 
+
+The first model presented is a model consisting of 2 `layer_gru()` followed by 2 `layer_dense()` with the last one being the output layer. To prevent overfitting dropout rates of 0.1 is set for both the regular dropout and the recurrent dropout.
+```{r}
+model <- keras_model_sequential() %>%
+  layer_gru(units = 32, input_shape = c(1, 4), return_sequences = TRUE, activation = 'relu') %>% 
+  layer_gru(units = 32, dropout = 0.1, recurrent_dropout = 0.1, return_sequences = FALSE, activation = 'relu') %>% 
+  layer_dense(units = 32, activation = 'relu') %>%
+  layer_dense(units = 1)
+
+model %>% 
+  compile(loss = "mse", 
+          metric = "mse", 
+          optimizer = "adam")
+
+gru_model <- model %>% fit(x = x_train_arr, 
+                           y = y_train_arr, 
+                           epochs = 10,
+                           verbose = 0, 
+                           batch_size = 64,
+                           validation_split = 0.10, 
+                           shuffle = FALSE)
+```
+
+The results of the model is saves for later comparison with the other models.
+```{r include=FALSE}
+result_gru <- model %>% evaluate(x_test_arr, y_test_arr)
+result_gru <- as.data.frame(result_gru)
+```
+
+The second model consists of 2 `layer_lstm()` and 2 `layer_dense()` with the same dropout rates as the previous model.
+```{r}
+model <- keras_model_sequential() %>%
+  layer_lstm(units = 32, input_shape= c(1, 4), return_sequences = TRUE, activation = 'relu') %>% 
+  layer_lstm(units = 32, dropout = 0.1, recurrent_dropout = 0.1, return_sequences = FALSE, activation = 'relu') %>% 
+  layer_dense(units = 32, activation = 'relu') %>%
+  layer_dense(units = 1)
+
+model %>% 
+  compile(loss = "mse", 
+          metric = "mse", 
+          optimizer = "adam")
+
+lstm_model <- model %>% fit(x = x_train_arr, 
+                           y = y_train_arr, 
+                           epochs = 10,
+                           verbose = 0, 
+                           batch_size = 64,
+                           validation_split = 0.10, 
+                           shuffle = FALSE)
+```
+
+```{r include=FALSE}
+result_lstm <- model %>% evaluate(x_test_arr, y_test_arr)
+result_lstm <- as.data.frame(result_lstm)
+```
+
+The third and fourth models are constructed in almost the same ways as models 1 and 2 with the only difference being that the second layer is a bidirectional layer. This layer runs the input both forward (as a regular GRU or LSTM layer) and backwards meaning that information from both the past and the future is used.
+```{r}
+model <- keras_model_sequential() %>%
+  layer_gru(units = 32, input_shape= c(1, 4), return_sequences = TRUE, activation = 'relu') %>% 
+bidirectional(
+  layer_gru(units = 32, dropout = 0.1, recurrent_dropout = 0.1, return_sequences = FALSE, activation = 'relu')
+              ) %>% 
+  layer_dense(units = 32, activation = 'relu') %>%
+  layer_dense(units = 1)
+
+model %>% 
+  compile(loss = "mse", 
+          metric = "mse", 
+          optimizer = "adam")
+
+bigru_model <- model %>% fit(x = x_train_arr, 
+                           y = y_train_arr, 
+                           epochs = 10,
+                           verbose = 0, 
+                           batch_size = 64,
+                           validation_split = 0.10, 
+                           shuffle = FALSE)
+```
+
+```{r, include=FALSE}
+result_bigru <- model %>% evaluate(x_test_arr, y_test_arr)
+result_bigru <- as.data.frame(result_bigru)
+```
+
+```{r}
+model <- keras_model_sequential() %>%
+  layer_lstm(units = 32, input_shape= c(1, 4), return_sequences = TRUE, activation = 'relu') %>% 
+bidirectional(
+  layer_lstm(units = 32, dropout = 0.1, recurrent_dropout = 0.1, return_sequences = FALSE, activation = 'relu')
+              ) %>% 
+  layer_dense(units = 32, activation = 'relu') %>%
+  layer_dense(units = 1)
+
+model %>% 
+  compile(loss = "mse", 
+          metric = "mse", 
+          optimizer = "adam")
+
+bilstm_model <- model %>% fit(x = x_train_arr, 
+                           y = y_train_arr, 
+                           epochs = 10,
+                           verbose = 0, 
+                           batch_size = 64,
+                           validation_split = 0.10, 
+                           shuffle = FALSE)
+```
+
+```{r, include=FALSE}
+result_bilstm <- model %>% evaluate(x_test_arr, y_test_arr)
+result_bilstm <- as.data.frame(result_bilstm)
+```
+
+The plots below show the development of the loss and rmse of the models over 10 epochs.
+```{r fig.width=15}
+plot_gru <- plot(gru_model)+
+  theme(legend.position = "right")+
+  ggtitle("model_GRU")
+
+plot_lstm <- plot(lstm_model)+
+  theme(legend.position = "right")+
+  ggtitle("model_LSTM")
+
+plot_bigru <- plot(bigru_model)+
+  theme(legend.position = "right")+
+  ggtitle("model_BiGRU")
+
+plot_bilstm <- plot(bilstm_model)+
+  theme(legend.position = "right")+
+  ggtitle("model_BiLSTM")
+
+
+lossplot <- ggarrange(plot_gru, plot_lstm, plot_bigru, plot_bilstm, ncol = 2, nrow = 2)
+lossplot
+```
+
+The models seem to improve as the number of epochs increase. The results of the models performance on the training data is presented in the table below.
+```{r}
+result_total <- cbind(result_gru, result_lstm, result_bigru, result_bilstm)
+result_total
+```
+The table shows that the bi-LSTM model is able to minimize both the loss function and the mse the most compared to the other models. 
+
+It should be noted that training of the models will result in different outcomes every time which could result in another model being the best. Several attempts have shown that the Bi-LSTM performs best most of the time.
+
+
+## Final model
+
+The final model differs from the bi_LSTM in the way that the model is fitted using `callback_early_stopping` where the model trains until the loss function of the validation set does not improve for 5 epochs. The number of epochs for training is therefore not decided upfront. 
+```{r}
+model_final <- keras_model_sequential() %>%
+  layer_lstm(units = 32, input_shape= c(1, 4), return_sequences = TRUE, activation = 'relu') %>% 
+
+bidirectional(
+  layer_lstm(units = 32, dropout = 0.1, recurrent_dropout= 0.1, return_sequences = FALSE, activation = 'relu')
+              ) %>% 
+  layer_dense(units = 32, activation = 'relu') %>%
+  layer_dense(units = 1)
+
+
+# Compile model
+model_final %>% 
+  compile(loss = "mse", 
+          metric = "mse", 
+          optimizer = "adam")
+
+model_final %>% fit(x = x_train_arr, 
+                    y = y_train_arr, 
+                    epochs = 100,
+                    verbose = 2, 
+                    batch_size = 64,
+                    validation_split = 0.10, 
+                    shuffle = FALSE,
+                    callback_early_stopping(
+                    monitor = "val_loss",
+                    patience = 5,
+                    restore_best_weights = TRUE
+                            ))
+```
+The output shows that the model performs the best when training over 56 epochs resulting in a mse of 0.004. 
+```{r}
+result_final <- model_final %>% evaluate(x_test_arr, y_test_arr, verbose=0)
+result_final <- as.data.frame(result_final)
+result_final
+```
+
+The model is used for predictions on both the training and test data in order to be able to plot the predictions against the true values.
+```{r}
+train_pred <- model_final %>% predict(x_train_arr)
+test_pred <- model_final %>% predict(x_test_arr)
+```
+
+The predictions are converted into dollars for easier interpretation.
+```{r}
+train_pred_unscale <- train_pred * att
+test_pred_unscale <- test_pred * att
+y_train_unscale <- y_train_arr * att 
+y_test_unscale <- y_test_arr * att
+```
+
+The observed and predicted values are combined in evaluation sets. In the shown `head()` the predictions seem to be rather close to the true observed value with differences around 0-2 dollars.
+```{r}
+eval_train <- tibble(
+  date = data_train_deep %>% pull(date),
+  truth = y_train_unscale,
+  pred = train_pred_unscale
+)
+
+eval_test <- tibble(
+  date = data_test_deep %>% pull(date),
+  truth = y_test_unscale,
+  pred = test_pred_unscale
+)
+
+eval_test %>% head()
+```
+The earlier shown mse of the final model is transformed into an unscaled rmse showing the average error indicating that the models predictions on average are 1.96 dollars off.
+```{r}
+eval_test %>% rmse(as.numeric(truth), as.numeric(pred))
+```
+
+The predictions and the true stock prices are presented in the plot below where the top plot shown the performance on the training set and the bottom plot shows performance on the test set. As expected the model performs best on the training set. 
+```{r}
+plot_train <- eval_train %>% 
+  pivot_longer(-date) %>%
+  ggplot(aes(x = date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("Training")
+
+plot_test <- eval_test %>% 
+  pivot_longer(-date) %>%
+  ggplot(aes(x = date, y = value, col = name)) +
+  geom_line() +
+  ggtitle("Test")
+
+plot <- ggarrange(plot_train, plot_test, ncol = 1)
+annotate_figure(plot, top = text_grob("Accuracy for model", size = 15))
+```
+Evaluating on the test data the model is able to predict the true stock prices rather precisely. It seems that the model performs the worst in the last period of the data where predictions are off by around 10 dollars.
+
+
+
+
+
