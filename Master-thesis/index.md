@@ -1,6 +1,6 @@
 # Master-thesis
 
-Code - For the coding used in the thesis
+[Code](https://andreasbj77.github.io/Repository---Andreas-Borup-J-rgensen/Master-thesis/Code/)- For the coding used in the thesis
 
 Data - For the data used in the thesis
 
