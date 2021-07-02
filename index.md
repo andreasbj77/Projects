@@ -1,14 +1,11 @@
-# Repository - Andreas Borup Jørgensen
+# Projekter
 
+## Speciale
 
-## Projekter
+## Social Data Science
 
-### Speciale
+# Projects
 
-### Social Data Science
+## [Masters thesis](https://github.com/andreasbj77/Projects/blob/main/Master-thesis/Master-thesis.md)
 
-## Projects
-
-### [Masters thesis](https://github.com/andreasbj77/Projects/blob/main/Master-thesis/Master-thesis.md)
-
-### Social Data Science
+## Social Data Science
