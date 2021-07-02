@@ -6,4 +6,4 @@
 
 [Models](https://andreasbj77.github.io/Repository---Andreas-Borup-Joergensen/Master-thesis/Models/) - For the models created in the thesis
 
-Speciale - [The thesis](https://andreasbj77.github.io/Repository---Andreas-Borup-Joergensen/Master-thesis/Speciale.pdf)
+[The thesis](https://andreasbj77.github.io/Repository---Andreas-Borup-Joergensen/Master-thesis/Speciale.pdf)
