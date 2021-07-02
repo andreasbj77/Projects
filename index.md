@@ -6,6 +6,6 @@
 
 # Projects
 
-## [Masters thesis](https://github.com/andreasbj77/Projects/blob/main/Master-thesis/Master-thesis.md)
+## [Masters thesis](https://github.com/andreasbj77/Projects/blob/main/Master-thesis/index.md)
 
 ## Social Data Science
