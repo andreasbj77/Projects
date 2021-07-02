@@ -1,11 +1,14 @@
-# Projekter
+# Repository - Andreas Borup Jørgensen
 
-## Speciale
 
-## Social Data Science
+## Projekter
 
-# Projects
+### Speciale
 
-## Masters thesis
+### Social Data Science
 
-## Social Data Science
+## Projects
+
+### Masters thesis
+
+### Social Data Science
