@@ -11,9 +11,9 @@ The coding for the econometric ARIMA models used as a baseline model in the thes
 
 * [Carlsberg](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/Carlsberg%20ARIMA%20med%20out%20of%20sample%20testing.Rmd)
 * [Genmab](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/Genmab%20ARIMA%20med%20out%20of%20sample%20testing.Rmd)
-* [Jyske Bank](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/JyskeBank%20ARIMA%20med%20out%20of%20sample%20testing.Rmd)
+* [Jyske Bank](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/Jyske%20Bank%20ARIMA%20med%20out%20of%20sample%20testing.Rmd)
 * [Mærsk B](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/MærskB%20ARIMA%20med%20out%20of%20sample%20testing.Rmd)
-* [SimCorp](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/SimCorp%20ARIMA%20med%20out%20of%20sample%20testing.Rmd)
+* [SimCorp](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/SimCorp%20ARIMA%20with%20out%20of%20sample%20testing.Rmd)
 * [Vestas](https://github.com/andreasbj77/Repository---Andreas-Borup-J-rgensen/blob/main/Master-thesis/Code/Econometrics/Vestas%20ARIMA%20med%20out%20of%20sample%20testing.Rmd)
 
 ## Machine learning
