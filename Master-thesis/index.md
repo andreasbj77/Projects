@@ -6,4 +6,4 @@ Data - For the data used in the thesis
 
 Models - For the models created in the thesis
 
-Speciale - [The thesis](https://github.com/andreasbj77/Projects/blob/main/Master-thesis/Speciale.pdf)
+Speciale - [The thesis](https://andreasbj77.github.io/Repository---Andreas-Borup-J-rgensen/Master-thesis/Speciale.pdf)
