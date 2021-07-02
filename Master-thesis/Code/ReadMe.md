@@ -19,7 +19,7 @@ The coding for the econometric ARIMA models used as a baseline model in the thes
 ## Machine learning
 The coding used for the Artificial neural networks in the thesis. It contains the code for these models both with and without additional features added to the models.
 
-1. Training and testing
+### Training and testing
 * [Carlsberg with features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Training_testing/Carlsberg.Rmd)
   * [Carlsberg without features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Training_testing/Carlsberg_single.Rmd)
 * [Genmab with features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Training_testing/Genmab.Rmd)
@@ -33,7 +33,7 @@ The coding used for the Artificial neural networks in the thesis. It contains th
 * [Vestas with features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Training_testing/Vestas.Rmd)
   * [Vestas without features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Training_testing/Vestas_single.Rmd)
  
-2. Forecasting
+### Forecasting
 * [Carlsberg with features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Forecasting/Carlsberg_forecast.Rmd)
   * [Carlsberg without features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Forecasting/Carlsberg_forecast_single.Rmd)
 * [Genmab with features](https://github.com/andreasbj77/Repository---Andreas-Borup-Joergensen/blob/main/Master-thesis/Code/Machine%20learning/Forecasting/Genmab_forecast.Rmd)
