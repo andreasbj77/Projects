@@ -6,6 +6,6 @@
 
 # Projects
 
-## [Masters thesis](https://github.com/andreasbj77/Projects/blob/main/Master-thesis)
+## [Masters thesis](https://andreasbj77.github.io/Repository---Andreas-Borup-J-rgensen/Master-thesis/)
 
 ## Social Data Science
